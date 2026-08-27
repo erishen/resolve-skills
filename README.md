@@ -17,7 +17,7 @@ Language-agnostic **Skills (prompt packs)** monorepo. Defines a programming-lang
 | Skill | Description | Has Scripts |
 |---|---|---|
 | [`code-review`](./skills/code-review/SKILL.md) | Review code files and output a structured review report (issue list + severity + suggestions) | ✅ `stats.py` |
-| [`post-comment`](./skills/post-comment/SKILL.md) | Pick a random published article on erishen.cn and submit a comment (for testing blog comment/interaction features) | ✅ `random-comment.mjs` |
+| [`post-comment`](./skills/post-comment/SKILL.md) | Pick a random published article on a WordPress site and submit a comment (for testing blog comment/interaction features). Site URL configured via `ERISHEN_BASE` env var. | ✅ `random-comment.mjs` |
 | [`rust-review`](./skills/rust-review/SKILL.md) | Review code quality following Rust team conventions | — |
 | [`weekly-investment-review`](./skills/weekly-investment-review/SKILL.md) | Generate a local portfolio weekly report. First calls `portfolio-summary` to get a real holdings snapshot (Markdown), then outputs a structured weekly report (portfolio overview / return commentary / risk alerts / rebalancing suggestions) | ✅ `portfolio-summary.mjs`, `pse-review.mjs`, `lib-mcp.mjs` |
 
@@ -61,7 +61,7 @@ See [`.env.example`](./.env.example) for all available variables. Key variables:
 | `PSE_SOULS_DIR` | Optional: path to `souls/` directory (defaults to `HARNESS_SKILLS_DIR/../souls`) |
 | `PROD_WORDPRESS_USERNAME` | WordPress username (for `post-comment` skill) |
 | `PROD_WORDPRESS_APP_PASSWORD` | WordPress application password (for `post-comment` skill) |
-| `ERISHEN_BASE` | Optional: override blog base URL (default `https://erishen.cn`) |
+| `ERISHEN_BASE` | Optional: override blog base URL (default `https://example.com` — set to your WordPress site) |
 | `AUTOGEN_PSE_DIR` | Optional: override path to autogen-pse (for `weekly-investment-review` skill) |
 | `PSE_REVIEW_PROVIDER` | Optional: `agnes` (free, default) or `deepseek` (paid) for PSE review |
 

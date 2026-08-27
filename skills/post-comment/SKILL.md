@@ -1,16 +1,16 @@
 ---
 name: post-comment
-description: 在 erishen.cn 随机挑一篇已发布文章并提交一条评论（测试站内评论/互动）。用户说「帮我给 erishen.cn 找篇文章评论一下」之类时使用
+description: 在 WordPress 站点随机挑一篇已发布文章并提交一条评论（测试站内评论/互动）。站点地址通过 ERISHEN_BASE 环境变量配置（默认 https://example.com，需改为你的站点）。用户说「帮我找篇文章评论一下」之类时使用
 ---
 
-# Post Comment 技能（erishen.cn）
+# Post Comment 技能（WordPress）
 
-适用场景：用户要求在 erishen.cn 随机找篇文章加评论，或测试博客评论功能。
+适用场景：用户要求在 WordPress 站点随机找篇文章加评论，或测试博客评论功能。
 
 ## 步骤
 
 1. **随机选文章**：用 `shell` 运行 `node ${SKILL_DIR}/scripts/random-comment.mjs --pick`，
-   一次调用即可，得到 `{ id, title, link }`（脚本直接从 erishen.cn 拉取随机文章，
+   一次调用即可，得到 `{ id, title, link }`（脚本直接从配置的 WordPress 站点拉取随机文章，
    不依赖外部 pick-post 工具）。不要重复调用。
 
 2. **看一眼文章**（可选）：用 `browser-open` 打开上一步的 `link`，了解文章主题，好写出有针对性的评论。
@@ -28,7 +28,7 @@ description: 在 erishen.cn 随机挑一篇已发布文章并提交一条评论�
 ## 注意事项
 
 - 这是对**用户自己站点**的写操作，会经过 `shell` 工具的审批（模型请求时用户需批准）；也依赖沙箱放行外网（`HARNESS_ALLOW_NETWORK=1`），否则请求会失败。
-- erishen.cn 开启了「必须登录后才能评论」——**匿名评论会 401**（`rest_comment_login_required`）。需要 `PROD_WORDPRESS_USERNAME` / `PROD_WORDPRESS_APP_PASSWORD`（WordPress 应用密码）。三选一放凭据（脚本按序加载，均**不覆盖**已存在的环境变量）：
+- 若站点开启了「必须登录后才能评论」——**匿名评论会 401**（`rest_comment_login_required`）。需要 `PROD_WORDPRESS_USERNAME` / `PROD_WORDPRESS_APP_PASSWORD`（WordPress 应用密码）。三选一放凭据（脚本按序加载，均**不覆盖**已存在的环境变量）：
   1. 本机稳定位置 `~/.config/resolve-skills/.env`（**推荐**，任意 checkout——含 resolve-tui 的 submodule——都能取到；直接把仓库根 `.env` 软链过去最省心）
   2. 环境变量 `HARNESS_SKILLS_ENV` 指向一个 `.env` 绝对路径
   3. 本仓库根 `.env`（复制 `${SKILL_DIR}/../../.env.example` 填入），仅源仓库场景生效

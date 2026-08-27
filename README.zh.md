@@ -17,7 +17,7 @@
 | 技能 | 说明 | 含脚本 |
 |---|---|---|
 | [`code-review`](./skills/code-review/SKILL.md) | 审查代码文件并输出结构化审查报告（问题列表 + 严重度 + 建议） | ✅ `stats.py` |
-| [`post-comment`](./skills/post-comment/SKILL.md) | 在 erishen.cn 随机挑一篇已发布文章并提交评论（测试站内评论/互动功能） | ✅ `random-comment.mjs` |
+| [`post-comment`](./skills/post-comment/SKILL.md) | 在 WordPress 站点随机挑一篇已发布文章并提交评论（测试站内评论/互动功能）。站点地址通过 `ERISHEN_BASE` 环境变量配置 | ✅ `random-comment.mjs` |
 | [`rust-review`](./skills/rust-review/SKILL.md) | 按 Rust 团队惯例审查代码质量 | — |
 | [`weekly-investment-review`](./skills/weekly-investment-review/SKILL.md) | 生成本地投资组合周报。先调 `portfolio-summary` 拿真实持仓快照摘要（Markdown），再按流程输出结构化周报（组合概览 / 收益点评 / 风险警示 / 调仓建议） | ✅ `portfolio-summary.mjs`, `pse-review.mjs`, `lib-mcp.mjs` |
 
@@ -61,7 +61,7 @@ cp .env.example .env
 | `PSE_SOULS_DIR` | 可选：`souls/` 目录路径（默认为 `HARNESS_SKILLS_DIR/../souls`） |
 | `PROD_WORDPRESS_USERNAME` | WordPress 用户名（`post-comment` 技能用） |
 | `PROD_WORDPRESS_APP_PASSWORD` | WordPress 应用密码（`post-comment` 技能用） |
-| `ERISHEN_BASE` | 可选：覆盖博客 base URL（默认 `https://erishen.cn`） |
+| `ERISHEN_BASE` | 可选：覆盖博客 base URL（默认 `https://example.com`，改为你的 WordPress 站点） |
 | `AUTOGEN_PSE_DIR` | 可选：覆盖 autogen-pse 路径（`weekly-investment-review` 技能用） |
 | `PSE_REVIEW_PROVIDER` | 可选：`agnes`（免费，默认）或 `deepseek`（付费）用于 PSE 回顾 |
 

@@ -7,7 +7,8 @@
  *   --post <id> --content "<text>"      post a comment on that post
  *       [--name ".."] [--email ".."]    commenter identity (defaults below)
  *
- * Talks to the WordPress REST API of erishen.cn (override with ERISHEN_BASE).
+ * Talks to the WordPress REST API (override base URL with ERISHEN_BASE,
+ * default https://example.com — set to your own WordPress site).
  * Zero dependencies — uses Node's global fetch. No credentials are stored:
  * anonymous comment creation must be allowed by the site; if the API rejects
  * the request (e.g. Wordfence / rest_cannot_create) the raw error is printed
@@ -24,7 +25,7 @@ const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 const SKILL_DIR = resolve(SCRIPTS_DIR, '..')
 const REPO_ROOT = resolve(SKILL_DIR, '../..')
 
-const BASE = process.env.ERISHEN_BASE ?? 'https://erishen.cn'
+const BASE = process.env.ERISHEN_BASE ?? 'https://example.com'
 const WP = `${BASE}/wp-json/wp/v2`
 const DEFAULT_NAME = '程序猿小林'
 const DEFAULT_EMAIL = 'noreply@example.com'
