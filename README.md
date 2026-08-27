@@ -1,4 +1,4 @@
-# harness-skills
+# resolve-skills
 
 语言无关的「技能（提示词包）」独立仓库。定义一套与编程语言无关的契约
 （见 [`SKILL_SPEC.md`](./SKILL_SPEC.md)），对齐 **Agent Skills** 开放标准
@@ -15,7 +15,7 @@
 ## 结构
 
 ```
-harness-skills/
+resolve-skills/
 ├── SKILL_SPEC.md        # 语言无关契约（对齐 Agent Skills 标准）
 ├── README.md
 ├── skills/              # 种子技能集合（<skill>/SKILL.md + 可选 scripts/ references/ assets/）

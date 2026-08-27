@@ -27,7 +27,7 @@ frontmatter 仅 `name` + `description` 参与路由、靠 `description` 让模�
 ## 1. 设计原则
 
 1. **语言无关**：技能文件是纯文本 + 可选脚本；正文（Markdown 指令）跨语言可直接注入。
-2. **可迁移 / 可独立**：技能集合是独立仓库（`harness-skills`），通过 `git submodule`
+2. **可迁移 / 可独立**：技能集合是独立仓库（`resolve-skills`），通过 `git submodule`
    / 依赖嵌入各 harness，版本可钉死。
 3. **标准优先**：字段以 Agent Skills 为标准；本 harness 只在标准之外加两三个**可选**
    扩展，且其它工具忽略它们。
@@ -177,7 +177,7 @@ load_skills(root_dir: Path) -> Vec<Skill>
 
 ## 7. 与其它 agent 生态的互操作（核心）
 
-同一份 `harness-skills/skills/*` **零改动**即可被三边消费，差异仅在发现路径：
+同一份 `resolve-skills/skills/*` **零改动**即可被三边消费，差异仅在发现路径：
 
 | 消费者 | 发现路径 | 激活 | 忽略的字段 |
 |---|---|---|---|

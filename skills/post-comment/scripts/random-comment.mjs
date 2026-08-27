@@ -19,7 +19,7 @@ import os from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// 本文件位置 → 技能目录 → harness-skills 仓库根。
+// 本文件位置 → 技能目录 → resolve-skills 仓库根。
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 const SKILL_DIR = resolve(SCRIPTS_DIR, '..')
 const REPO_ROOT = resolve(SKILL_DIR, '../..')
@@ -29,7 +29,7 @@ const WP = `${BASE}/wp-json/wp/v2`
 const DEFAULT_NAME = '程序猿小林'
 const DEFAULT_EMAIL = 'coder.xiaolin@163.com'
 
-// 凭据加载：顺序 --env-dir → <cwd>/.env → harness-skills 根/.env，均不覆盖已有变量。
+// 凭据加载：顺序 --env-dir → <cwd>/.env → resolve-skills 根/.env，均不覆盖已有变量。
 function loadEnvNoOverride(file) {
   let text
   try {
@@ -55,13 +55,13 @@ function loadEnvNoOverride(file) {
 }
 {
   // 候选顺序（均不覆盖已存在变量）：HARNESS_SKILLS_ENV 显式文件 →
-  // --env-dir 目录 → ~/.config/harness-skills/.env（稳定本机位置，任意 checkout 都认）→
+  // --env-dir 目录 → ~/.config/resolve-skills/.env（稳定本机位置，任意 checkout 都认）→
   // <cwd>/.env → 本仓库根/.env。后四项解决「submodule 不带 .env」的问题。
   const explicit = has('--env-dir') && arg('--env-dir') ? `${arg('--env-dir')}/.env` : undefined
   const envVarFile = process.env.HARNESS_SKILLS_ENV || undefined
   const homeCfg = process.env.XDG_CONFIG_HOME
-    ? join(process.env.XDG_CONFIG_HOME, 'harness-skills', '.env')
-    : join(os.homedir(), '.config', 'harness-skills', '.env')
+    ? join(process.env.XDG_CONFIG_HOME, 'resolve-skills', '.env')
+    : join(os.homedir(), '.config', 'resolve-skills', '.env')
   for (const f of [
     envVarFile,
     explicit,

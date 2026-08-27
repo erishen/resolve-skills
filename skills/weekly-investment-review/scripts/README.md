@@ -28,11 +28,11 @@ autogen-pse，与 resolve-studio 插件的取数逻辑一致。
 ```toml
 [mcp_servers.portfolio-summary]
 command = "node"
-args = ["/你的路径/work/harness/harness-skills/skills/weekly-investment-review/scripts/portfolio-summary.mjs"]
+args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/portfolio-summary.mjs"]
 
 [mcp_servers.pse-review]
 command = "node"
-args = ["/你的路径/work/harness/harness-skills/skills/weekly-investment-review/scripts/pse-review.mjs"]
+args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/pse-review.mjs"]
 env = { PSE_REVIEW_PROVIDER = "agnes" }   # 可选表项
 ```
 

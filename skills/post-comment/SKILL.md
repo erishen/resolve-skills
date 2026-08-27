@@ -29,8 +29,8 @@ description: 在 erishen.cn 随机挑一篇已发布文章并提交一条评论�
 
 - 这是对**用户自己站点**的写操作，会经过 `shell` 工具的审批（模型请求时用户需批准）；也依赖沙箱放行外网（`HARNESS_ALLOW_NETWORK=1`），否则请求会失败。
 - erishen.cn 开启了「必须登录后才能评论」——**匿名评论会 401**（`rest_comment_login_required`）。需要 `PROD_WORDPRESS_USERNAME` / `PROD_WORDPRESS_APP_PASSWORD`（WordPress 应用密码）。三选一放凭据（脚本按序加载，均**不覆盖**已存在的环境变量）：
-  1. 本机稳定位置 `~/.config/harness-skills/.env`（**推荐**，任意 checkout——含 resolve-tui 的 submodule——都能取到；直接把仓库根 `.env` 软链过去最省心）
+  1. 本机稳定位置 `~/.config/resolve-skills/.env`（**推荐**，任意 checkout——含 resolve-tui 的 submodule——都能取到；直接把仓库根 `.env` 软链过去最省心）
   2. 环境变量 `HARNESS_SKILLS_ENV` 指向一个 `.env` 绝对路径
   3. 本仓库根 `.env`（复制 `${SKILL_DIR}/../../.env.example` 填入），仅源仓库场景生效
-  模板见 `harness-skills/.env.example`。没配就匿名试、失败把错误**原样转述**给用户，不要猜测或硬塞认证信息（Wordfence 可能拦截应用密码认证，遇 401/403 如实报告）。可用 `node ${SKILL_DIR}/scripts/random-comment.mjs --env-check` 零副作用检查凭据是否就位。
+  模板见 `resolve-skills/.env.example`。没配就匿名试、失败把错误**原样转述**给用户，不要猜测或硬塞认证信息（Wordfence 可能拦截应用密码认证，遇 401/403 如实报告）。可用 `node ${SKILL_DIR}/scripts/random-comment.mjs --env-check` 零副作用检查凭据是否就位。
 - 不要修改/删除已提交的评论；评论内容只由用户要求或模型基于文章生成。
