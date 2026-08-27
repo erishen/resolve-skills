@@ -19,11 +19,16 @@ const WP = `${BASE}/wp-json/wp/v2`
 const DEFAULT_NAME = '程序猿小林'
 const DEFAULT_EMAIL = 'coder.xiaolin@163.com'
 
-// Load <cwd>/.env into process.env (does not override already-set vars). This
-// lets the skill pick up existing WordPress credentials without exporting them
-// by hand. Safe: only reads, never prints secrets.
+// Load <cwd>/.env (or --env-dir <path>/.env) into process.env (does not override
+// already-set vars). This lets the skill pick up existing WordPress credentials
+// without exporting them by hand. Safe: only reads, never prints secrets.
+let envFile
+{
+  const i = process.argv.indexOf('--env-dir')
+  if (i >= 0 && i + 1 < process.argv.length) envFile = `${process.argv[i + 1]}/.env`
+}
 try {
-  process.loadEnvFile()
+  process.loadEnvFile(envFile)
 } catch {
   // no .env in cwd — fine, rely on the ambient environment
 }
