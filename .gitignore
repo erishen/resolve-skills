@@ -1,0 +1,7 @@
+# 本地真实凭据 / 密钥：一律不入库（模板保留为 .env.example）
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store

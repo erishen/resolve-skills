@@ -28,5 +28,5 @@ description: 在 erishen.cn 随机挑一篇已发布文章并提交一条评论�
 ## 注意事项
 
 - 这是对**用户自己站点**的写操作，会经过 `shell` 工具的审批（模型请求时用户需批准）；也依赖沙箱放行外网（`HARNESS_ALLOW_NETWORK=1`），否则请求会失败。
-- erishen.cn 开启了「必须登录后才能评论」——**匿名评论会 401**（`rest_comment_login_required`）。项目 `.env` 里已有的 `PROD_WORDPRESS_USERNAME` / `PROD_WORDPRESS_APP_PASSWORD`（WordPress 应用密码）即可认证：脚本默认加载 `<cwd>/.env`，检测到这两个变量就带 Basic 认证提交。若运行目录不是项目根（如沙箱工作区），用 `--env-dir <项目目录>` 指定；没配就匿名试、失败把错误**原样转述**给用户，不要猜测或硬塞认证信息（Wordfence 可能拦截应用密码认证，遇 401/403 如实报告）。
+- erishen.cn 开启了「必须登录后才能评论」——**匿名评论会 401**（`rest_comment_login_required`）。需要 `PROD_WORDPRESS_USERNAME` / `PROD_WORDPRESS_APP_PASSWORD`（WordPress 应用密码）。最省事：把 `${SKILL_DIR}/../../.env.example` 复制为本仓库根目录下的 `.env` 填入即可（该文件已 .gitignore，不入库）。脚本会依次从 `--env-dir <目录>/.env` → `<cwd>/.env` → 仓库根 `/ .env` 加载，检测到变量就带 Basic 认证提交，且**不覆盖**已存在的环境变量。没配就匿名试、失败把错误**原样转述**给用户，不要猜测或硬塞认证信息（Wordfence 可能拦截应用密码认证，遇 401/403 如实报告）。
 - 不要修改/删除已提交的评论；评论内容只由用户要求或模型基于文章生成。

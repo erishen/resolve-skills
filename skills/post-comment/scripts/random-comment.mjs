@@ -14,23 +14,49 @@
  * and the skill reports it instead of guessing.
  */
 
+import fs from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// 本文件位置 → 技能目录 → harness-skills 仓库根。
+const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
+const SKILL_DIR = resolve(SCRIPTS_DIR, '..')
+const REPO_ROOT = resolve(SKILL_DIR, '../..')
+
 const BASE = process.env.ERISHEN_BASE ?? 'https://erishen.cn'
 const WP = `${BASE}/wp-json/wp/v2`
 const DEFAULT_NAME = '程序猿小林'
 const DEFAULT_EMAIL = 'coder.xiaolin@163.com'
 
-// Load <cwd>/.env (or --env-dir <path>/.env) into process.env (does not override
-// already-set vars). This lets the skill pick up existing WordPress credentials
-// without exporting them by hand. Safe: only reads, never prints secrets.
-let envFile
-{
-  const i = process.argv.indexOf('--env-dir')
-  if (i >= 0 && i + 1 < process.argv.length) envFile = `${process.argv[i + 1]}/.env`
+// 凭据加载：顺序 --env-dir → <cwd>/.env → harness-skills 根/.env，均不覆盖已有变量。
+function loadEnvNoOverride(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return
+  }
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const eq = line.indexOf('=')
+    if (eq <= 0) continue
+    const key = line.slice(0, eq).trim()
+    let val = line.slice(eq + 1).trim()
+    if (
+      (val.startsWith('"') && val.endsWith('"')) ||
+      (val.startsWith("'") && val.endsWith("'"))
+    ) {
+      val = val.slice(1, -1)
+    }
+    if (process.env[key] === undefined) process.env[key] = val
+  }
 }
-try {
-  process.loadEnvFile(envFile)
-} catch {
-  // no .env in cwd — fine, rely on the ambient environment
+{
+  const explicit = has('--env-dir') && arg('--env-dir') ? `${arg('--env-dir')}/.env` : undefined
+  for (const f of [explicit, join(process.cwd(), '.env'), join(REPO_ROOT, '.env')]) {
+    if (f) loadEnvNoOverride(f)
+  }
 }
 
 // Optional auth for sites that require login to comment (comment_registration).
