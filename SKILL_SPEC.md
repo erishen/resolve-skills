@@ -54,6 +54,18 @@ frontmatter 仅 `name` + `description` 参与路由、靠 `description` 让模�
 - **`<skill-name>` 必须等于 `SKILL.md` 内的 `name`**（Agent Skills / Claude Code
   移植性硬性要求）。目录名即命令名 / 调用标识。
 
+### 技能自携工具桥（MCP）
+
+技能若依赖外部工具（如本地私有数据管线），可在 `scripts/` 内携带**零依赖 Node
+MCP stdio server**（骨架见 `weekly-investment-review/scripts/lib-mcp.mjs`），把工具
+桥接成任意 harness（resolve-tui / Claude Code / Codex）可注册的 MCP server。约定：
+
+- 一个工具一个入口文件（如 `scripts/portfolio-summary.mjs`），内部 `import` 共享的
+  `lib-mcp.mjs` 协议骨架。
+- `scripts/README.md` 记录各 harness 的注册方法（resolve-tui `[mcp_servers]`、
+  Claude Code `.mcp.json` 等）与数据源/隐私注意事项。
+- 技能正文用 `${SKILL_DIR}/scripts/` 说明工具来源与注册入口。
+
 ---
 
 ## 3. `SKILL.md` 格式

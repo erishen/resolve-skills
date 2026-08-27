@@ -13,6 +13,11 @@ description: 生成本地投资组合周报。先调 portfolio-summary 拿真实
 
 1. **调工具拿摘要**：调用 `portfolio-summary` 工具（只读、无审批），得到结构化的组合摘要 Markdown（含组合概览 / 自动检测问题 / 黄金与房产快照 / 汇率 / 定投审查 / 资产配置 / 持仓明细 / 风险分布 / 市场行情 / 投资效率 / 时间分组 / 任务提示）。
 
+> **工具来源**：`portfolio-summary` 与 `pse-review` 是本技能自带的 MCP 桥（见 `${SKILL_DIR}/scripts/`，
+> 零依赖 Node stdio server，桥接 autogen-pse 数据管线）。你的 harness 若没注册这两个工具
+> （resolve-tui 在 config.toml `[mcp_servers]`、Claude Code 在 `.mcp.json`），先照
+> `${SKILL_DIR}/scripts/README.md` 注册，否则本技能无法取到真实持仓数据。
+
 2. **确认数据基准**：摘要顶部标注了**快照日期**（如「投资数据截止 2026年08月22日」）。周报里必须声明这个时间基准，**不得**把快照数据当作「当前实时行情」来分析。
 
 3. **输出周报**（Markdown，结构如下）：

@@ -1,0 +1,127 @@
+// pse-review 工具：MCP stdio 桥。
+// 包装 autogen-pse 完整 PSE 管线：prepare.py（重算快照）→ run.py（
+// Planner/Specialist/Evaluator 团队 + 个人知识库检索）→ 返回已保存的完整周报。
+// 耗时长（2-6 分钟）且会调用模型（provider 决定模型来源，见 skkill 与 README）。
+// 数据源可用 AUTOGEN_PSE_DIR 覆盖；默认 provider 见 PSE_REVIEW_PROVIDER。
+
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { readFile } from 'node:fs/promises'
+import fs from 'node:fs'
+
+import { runServer, truncate } from './lib-mcp.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+function findAutogenPse() {
+  if (process.env.AUTOGEN_PSE_DIR) return process.env.AUTOGEN_PSE_DIR
+  let dir = HERE
+  for (let i = 0; i < 14; i++) {
+    const cand = join(dir, 'frameworks', 'autogen-pse')
+    if (fs.existsSync(join(cand, 'tasks', 'portfolio-review', 'run.py'))) return cand
+    const up = dirname(dir)
+    if (up === dir) break
+    dir = up
+  }
+  return join(HERE, 'frameworks', 'autogen-pse')
+}
+
+const AUTOGEN_PSE = findAutogenPse()
+const PREPARE_TIMEOUT_MS = 180_000
+const RUN_TIMEOUT_MS = 480_000
+const MAX_OUTPUT = 48 * 1024
+// run.py 结束时打印的产物路径标记。
+const REVIEW_SAVED_RE = /Review 已保存 →\s*(\S+)/
+
+const execFileAsync = promisify(execFile)
+
+// 模型来源显式化（对应 autogen-pse 的 make review-agnes / review-deepseek）：
+//  - agnes：免费、非流式；沿用当前进程 env 里的 agnes 凭据。
+//  - deepseek：付费（DeepSeek）；覆盖 model/base_url，并删掉 OPENAI_API_KEY，
+//    让 run.py 回退读 autogen-pse/.env 的 deepseek key（cwd=AUTOGEN_PSE）。
+function buildRunEnv(provider) {
+  const env = { ...process.env }
+  if (provider === 'deepseek') {
+    env.OPENAI_MODEL = 'deepseek-v4-flash'
+    env.OPENAI_BASE_URL = 'https://api.deepseek.com/v1'
+    delete env.OPENAI_API_KEY
+    env.PSE_MODEL_STREAM = 'true'
+  } else {
+    env.PSE_MODEL_STREAM = 'false'
+  }
+  return env
+}
+
+async function pseReview(provider) {
+  const runEnv = buildRunEnv(provider)
+  // 1) 重算快照 / 生成 prompt 文件（也刷新 asset-lens 收益）。
+  try {
+    await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/prepare.py'], {
+      cwd: AUTOGEN_PSE,
+      timeout: PREPARE_TIMEOUT_MS,
+      maxBuffer: 1 << 20,
+      env: runEnv,
+    })
+  } catch (e) {
+    const detail = (e.stderr ?? e.message ?? String(e)) || ''
+    return `error: pse-review prepare step failed — ${truncate(detail, 600)}`
+  }
+  // 2) 跑完整 PSE 团队。
+  let stdout = ''
+  try {
+    const run = await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/run.py'], {
+      cwd: AUTOGEN_PSE,
+      timeout: RUN_TIMEOUT_MS,
+      maxBuffer: 4 << 20,
+      env: runEnv,
+    })
+    stdout = run.stdout ?? ''
+  } catch (e) {
+    const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
+    return `error: pse-review run step failed — ${truncate(tail, 800)}`
+  }
+  // 3) 优先返回已保存的周报全文。
+  const m = REVIEW_SAVED_RE.exec(stdout)
+  if (m?.[1]) {
+    try {
+      const review = await readFile(m[1], { encoding: 'utf8' })
+      return truncate(`> PSE review saved to ${m[1]}\n\n${review}`, MAX_OUTPUT)
+    } catch {
+      // fall through：返回 run 的 stdout
+    }
+  }
+  return truncate(stdout || '(no output)', MAX_OUTPUT)
+}
+
+runServer({
+  name: 'pse-review',
+  version: '1.0.0',
+  tools: [
+    {
+      name: 'pse-review',
+      description:
+        '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
+        '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
+        '可选 provider："agnes"（免费、非流式，默认）或 "deepseek"（付费）。即可用于需要严肃、' +
+        '有质量门槛的周报（weekly-investment-review 技能的深度版）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          provider: {
+            type: 'string',
+            enum: ['agnes', 'deepseek'],
+            description: "模型来源：agnes（免费）或 deepseek（付费，读取 autogen-pse/.env 的 key）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'agnes'。",
+          },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+      async run(args) {
+        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'agnes'
+        return pseReview(raw === 'deepseek' ? 'deepseek' : 'agnes')
+      },
+    },
+  ],
+})
