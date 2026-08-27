@@ -15,6 +15,7 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -53,8 +54,21 @@ function loadEnvNoOverride(file) {
   }
 }
 {
+  // 候选顺序（均不覆盖已存在变量）：HARNESS_SKILLS_ENV 显式文件 →
+  // --env-dir 目录 → ~/.config/harness-skills/.env（稳定本机位置，任意 checkout 都认）→
+  // <cwd>/.env → 本仓库根/.env。后四项解决「submodule 不带 .env」的问题。
   const explicit = has('--env-dir') && arg('--env-dir') ? `${arg('--env-dir')}/.env` : undefined
-  for (const f of [explicit, join(process.cwd(), '.env'), join(REPO_ROOT, '.env')]) {
+  const envVarFile = process.env.HARNESS_SKILLS_ENV || undefined
+  const homeCfg = process.env.XDG_CONFIG_HOME
+    ? join(process.env.XDG_CONFIG_HOME, 'harness-skills', '.env')
+    : join(os.homedir(), '.config', 'harness-skills', '.env')
+  for (const f of [
+    envVarFile,
+    explicit,
+    homeCfg,
+    join(process.cwd(), '.env'),
+    join(REPO_ROOT, '.env'),
+  ]) {
     if (f) loadEnvNoOverride(f)
   }
 }
@@ -69,6 +83,18 @@ const authHeader =
   wpUser && wpAppPassword
     ? `Basic ${Buffer.from(`${wpUser}:${wpAppPassword}`).toString('base64')}`
     : undefined
+
+// 调试/零副作用模式：只报告凭据是否就位（布尔，绝不打印值）。
+if (has('--env-check')) {
+  console.log(
+    JSON.stringify({
+      wpUser: !!wpUser,
+      wpAppPassword: !!wpAppPassword,
+      auth: !!authHeader,
+    }),
+  )
+  process.exit(0)
+}
 
 function arg(name) {
   const i = process.argv.indexOf(name)
