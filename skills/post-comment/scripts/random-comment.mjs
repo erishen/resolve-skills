@@ -27,7 +27,7 @@ const REPO_ROOT = resolve(SKILL_DIR, '../..')
 const BASE = process.env.ERISHEN_BASE ?? 'https://erishen.cn'
 const WP = `${BASE}/wp-json/wp/v2`
 const DEFAULT_NAME = '程序猿小林'
-const DEFAULT_EMAIL = 'coder.xiaolin@163.com'
+const DEFAULT_EMAIL = 'noreply@example.com'
 
 // 凭据加载：顺序 --env-dir → <cwd>/.env → resolve-skills 根/.env，均不覆盖已有变量。
 function loadEnvNoOverride(file) {
