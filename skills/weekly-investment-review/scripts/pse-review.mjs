@@ -67,6 +67,11 @@ function buildRunEnv(provider) {
 
 async function pseReview(provider) {
   const runEnv = buildRunEnv(provider)
+  const isPaid = provider === 'deepseek'
+  const notice = isPaid
+    ? '\n⚠️ 注意：本次使用 DeepSeek（付费模型）运行 PSE 深度分析，将产生 API 费用（约 ¥0.1–1/次）。如需免费可选 agnes，但 agnes 在当前多 Agent 流水线无法生成报告。\n'
+    : ''
+  if (isPaid) console.error(notice.trim())
   // 1) 重算快照 / 生成 prompt 文件（也刷新 asset-lens 收益）。
   try {
     await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/prepare.py'], {
@@ -77,7 +82,7 @@ async function pseReview(provider) {
     })
   } catch (e) {
     const detail = (e.stderr ?? e.message ?? String(e)) || ''
-    return `error: pse-review prepare step failed — ${truncate(detail, 600)}`
+      return `${notice}error: pse-review prepare step failed — ${truncate(detail, 600)}`
   }
   // 2) 跑完整 PSE 团队。
   let stdout = ''
@@ -91,7 +96,7 @@ async function pseReview(provider) {
     stdout = run.stdout ?? ''
   } catch (e) {
     const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
-    return `error: pse-review run step failed — ${truncate(tail, 800)}`
+      return `${notice}error: pse-review run step failed — ${truncate(tail, 800)}`
   }
   // 3) 优先返回已保存的周报全文，并落一份相对路径副本供 web 预览。
   const m = REVIEW_SAVED_RE.exec(stdout)
@@ -99,15 +104,15 @@ async function pseReview(provider) {
     try {
       const review = await readFile(m[1], { encoding: 'utf8' })
       const rel = await copyReviewToSandbox(m[1], review)
-      return truncate(
-        `> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${m[1]}\n\n${review}`,
-        MAX_OUTPUT,
-      )
+        return truncate(
+          `${notice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${m[1]}\n\n${review}`,
+          MAX_OUTPUT,
+        )
     } catch {
       // fall through：返回 run 的 stdout
     }
   }
-  return truncate(stdout || '(no output)', MAX_OUTPUT)
+    return truncate(`${notice}${stdout || '(no output)'}`, MAX_OUTPUT)
 }
 
 runServer({
@@ -119,22 +124,22 @@ runServer({
       description:
         '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
         '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
-        '可选 provider："agnes"（免费、非流式，默认）或 "deepseek"（付费）。即可用于需要严肃、' +
-        '有质量门槛的周报（weekly-investment-review 技能的深度版）。',
+        '可选 provider："deepseek"（付费，默认，能生成完整深度报告）或 "agnes"（免费，但在当前多 Agent 流水线无法生成报告）。' +
+        '⚠️ 注意：deepseek 为付费模型，运行将产生 API 费用。',
       inputSchema: {
         type: 'object',
         properties: {
           provider: {
             type: 'string',
             enum: ['agnes', 'deepseek'],
-            description: "模型来源：agnes（免费）或 deepseek（付费，读取 autogen-pse/.env 的 key）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'agnes'。",
+            description: "模型来源：deepseek（付费，默认，能生成完整深度报告）或 agnes（免费，但在当前多 Agent 流水线无法生成报告）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'deepseek'（付费）。",
           },
         },
         required: [],
         additionalProperties: false,
       },
       async run(args) {
-        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'agnes'
+        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'deepseek'
         return pseReview(raw === 'deepseek' ? 'deepseek' : 'agnes')
       },
     },
