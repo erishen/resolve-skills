@@ -38,8 +38,12 @@ const STUDIO_ROOT =
 async function copyReviewToSandbox(srcPath, content) {
   const destDir = join(STUDIO_ROOT, 'sandbox', 'weekly-investment-review')
   await mkdir(destDir, { recursive: true })
-  await writeFile(join(destDir, basename(srcPath)), content, 'utf8')
-  return `sandbox/weekly-investment-review/${basename(srcPath)}`
+  // 产物路径形如 output/<model>/weekly_review_<date>.md —— 把模型目录名嵌入副本
+  // 文件名，避免不同模型（agnes / deepseek）同一天的报告互相覆盖。
+  const modelDir = basename(dirname(srcPath))
+  const destName = `${modelDir}__${basename(srcPath)}`
+  await writeFile(join(destDir, destName), content, 'utf8')
+  return `sandbox/weekly-investment-review/${destName}`
 }
 
 // 校验产物是否可用：agnes 偶发卡死，可能写出空/残缺报告。
