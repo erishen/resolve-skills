@@ -216,9 +216,12 @@ async function pseReview(requestedProvider, report) {
   if (usedPaid) console.error(paidNotice.trim())
   if (!res.ok) {
     // agnes 抽风：不自动切付费；提示可重试 agnes（免费）或显式选 deepseek（付费、需审批）。
+    // 前缀标记 `tok:mcp-tool/pse-review` 无效；改用独立哨兵：`PSE_RETRY_CHOICE`，
+    // 前端 ToolCallCard 据此渲染「重试 agnes / 改用 deepseek」两个按钮，点击后直接
+    // 以对应 provider 重新调用本工具（deepseek 走会触发审批门）。
     const hint =
       provider === 'agnes'
-        ? '⚠️ agnes 本次抽风（产物不可用），未自动切付费模型。可选方案：\n' +
+        ? 'PSE_RETRY_CHOICE\n⚠️ agnes 本次抽风（产物不可用），未自动切付费模型。可选方案：\n' +
           '  · 重试 agnes（免费）：再次调用本工具，不传 provider。\n' +
           '  · 改用 DeepSeek（付费、稳定，约 ¥0.1–1/次，将触发审批）：传 provider="deepseek"。'
         : '⚠️ DeepSeek（付费）本次也失败，请稍后重试或检查 deepseek key。'
