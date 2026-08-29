@@ -1,7 +1,7 @@
 // portfolio-check 工具：MCP stdio 桥。
 // 在 asset-lens 项目里依次执行 make calculate / make analyze / make compare，
 // 刷新本地持仓快照并扫描异常（如年化收益率为天文数字、产品级离群值、内置风险提示），
-// 返回体检结论。作为 weekly-investment-review 技能的前置检查：先确认数据无误，再做复盘。
+// 返回体检结论。作为 weekly-investment 技能的前置检查：先确认数据无误，再做复盘。
 // 注册方法见同目录 README.md。数据源可用 ASSET_LENS_DIR 覆盖。
 
 import { execFile } from 'node:child_process'
@@ -135,7 +135,7 @@ runServer({
       description:
         '投资前数据体检：在 asset-lens 项目里依次执行 make calculate / make analyze / make compare，' +
         '刷新本地持仓快照并扫描异常（如年化收益率为天文数字、产品级离群值、内置风险提示），返回体检结论。' +
-        '作为 weekly-investment-review 技能的前置检查，确认数据无误后再做投资复盘。只读、无副作用。',
+        '作为 weekly-investment 技能的前置检查，确认数据无误后再做投资复盘。只读、无副作用。',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async run() {
         return portfolioCheck()

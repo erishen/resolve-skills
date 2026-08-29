@@ -1,9 +1,9 @@
 ---
-name: weekly-investment-review
+name: weekly-investment
 description: 生成本地投资组合周报。先调 portfolio-check 做数据体检（刷新并扫描异常），再调 pse-review 用 PSE 三角色流水线生成深度周报（组合概览 / 收益点评 / 风险警示 / 调仓建议）。适合回答「帮我看看这周投资情况」「生成投资周报」。
 ---
 
-# 每周投资回顾（Weekly Investment Review）
+# 每周投资回顾（Weekly Investment）
 
 ## 适用场景
 
