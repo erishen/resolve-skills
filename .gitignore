@@ -3,5 +3,8 @@
 .env.*
 !.env.example
 
+# PSE 人格/灵魂设定：属个人上下文，不入库（本地保留即可）
+souls/
+
 # macOS
 .DS_Store
