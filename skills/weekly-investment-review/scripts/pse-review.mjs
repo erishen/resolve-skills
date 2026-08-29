@@ -225,11 +225,18 @@ async function pseReview(requestedProvider, report) {
           '本次为失败结果。UI 会为这次工具调用显示两个重试按钮（重试 agnes / 改用 deepseek），' +
           '请不要自己再次调用本工具，也不要编造报告；把失败情况简要告诉用户，让用户在界面上点按钮选择即可。'
         : 'error: ⚠️ DeepSeek（付费）本次也失败，未生成报告，请勿编造。可建议用户稍后重试或检查 deepseek key。'
+    // 失败时只给简短原因。no-file 分支的 res.stdout 是 run.py 的 verbose 日志
+    //（含「第 N 次循环 / [user] / 组合概览」等，看起来像有效产物），拼进去会让
+    // agent 误以为报告可用、甚至据此编造。抽风失败一律只回原因，不附 stdout。
     const detail =
-      res.phase === 'invalid' || res.phase === 'provider-leak'
-        ? res.reason ?? '(无具体原因)'
-        : res.stdout || res.detail || '(no output)'
-    return truncate(`${hint}\n${paidNotice}\n${truncate(detail, 1200)}`, MAX_OUTPUT)
+      res.phase === 'invalid'
+        ? `校验未通过：${res.reason ?? '产物不完整'}`
+        : res.phase === 'provider-leak'
+          ? res.reason ?? '(provider 与产物模型不一致)'
+          : res.phase === 'no-file'
+            ? 'PSE 团队运行完成但未产出有效周报（trace 无「最终结论」），可能中途卡死或超时。'
+            : `在 ${res.phase} 阶段失败。`
+    return truncate(`${hint}\n${paidNotice}\n${detail}`, MAX_OUTPUT)
   }
   const rel = await copyReviewToSandbox(res.path, res.review)
   return truncate(
