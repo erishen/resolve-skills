@@ -12,8 +12,10 @@ const PROTOCOL_VERSION = '2024-11-05'
  * @param {object} spec
  * @param {string} spec.name              server 名
  * @param {string} spec.version           server 版本
- * @param {Array<{name:string,description?:string,inputSchema?:object,run:(args:object)=>Promise<string>}>} spec.tools
+ * @param {Array<{name:string,description?:string,inputSchema?:object,run:(args:object,report?:(msg:string)=>void)=>Promise<string>}>} spec.tools
  *   run 返回要下发给模型的文本；失败时以 `error: ...` 前缀返回即可（与工具惯例一致）。
+ *   run 可选用 `report(msg)` 在长任务执行中发送 `notifications/progress`，让 UI 实时展示进度
+ *   （仅当调用方在 _meta.progressToken 里携带 token 时才会真正发送，无 token 则为 no-op）。
  */
 export async function runServer(spec) {
   const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })
@@ -67,7 +69,21 @@ export async function runServer(spec) {
             err(-32602, `unknown tool: ${params.name}`)
             break
           }
-          const text = await tool.run(params.arguments ?? {})
+          // 客户端若在 _meta.progressToken 里给了 token，就给 run 提供一个
+          // report(msg) 用于发送进度通知（无 token 时为空操作，保持向后兼容）。
+          const token = params?._meta?.progressToken
+          const report =
+            token !== undefined
+              ? (message) =>
+                  process.stdout.write(
+                    JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'notifications/progress',
+                      params: { progressToken: token, message: String(message) },
+                    }) + '\n',
+                  )
+              : () => {}
+          const text = await tool.run(params.arguments ?? {}, report)
           reply({ content: [{ type: 'text', text }], isError: false })
           break
         }

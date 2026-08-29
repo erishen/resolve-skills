@@ -4,7 +4,8 @@
 // 耗时长（2-6 分钟）且会调用模型（provider 决定模型来源，见 skkill 与 README）。
 // 数据源可用 AUTOGEN_PSE_DIR 覆盖；默认 provider 见 PSE_REVIEW_PROVIDER。
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -81,9 +82,49 @@ function buildRunEnv(provider) {
   return env
 }
 
-async function runPipeline(provider) {
+// 流式运行 run.py：逐行把 verbose 日志转发给 report（UI 实时进度），同时累积
+// stdout 以便解析「Review 已保存 →」产物路径；超时/非零退出时 reject。
+function streamRun(provider, report) {
+  const env = buildRunEnv(provider)
+  const child = spawn('uv', ['run', 'python', 'tasks/portfolio-review/run.py'], {
+    cwd: AUTOGEN_PSE,
+    env,
+  })
+  return new Promise((resolve, reject) => {
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(Object.assign(new Error(`run.py 超时（${RUN_TIMEOUT_MS / 1000}s）`), { stdout }))
+    }, RUN_TIMEOUT_MS)
+    child.stdout.setEncoding('utf8')
+    const rl = createInterface({ input: child.stdout })
+    rl.on('line', (line) => {
+      const s = line.trim()
+      if (!s) return
+      stdout += `${s}\n`
+      report?.(s)
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (d) => {
+      stderr += d
+    })
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolve({ stdout })
+      else reject(Object.assign(new Error(`run.py exited ${code}`), { stdout, stderr }))
+    })
+  })
+}
+
+async function runPipeline(provider, report = () => {}) {
   const runEnv = buildRunEnv(provider)
   // 1) 重算快照 / 生成 prompt 文件（也刷新 asset-lens 收益）。
+  report('重算快照（prepare.py）…')
   try {
     await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/prepare.py'], {
       cwd: AUTOGEN_PSE,
@@ -95,20 +136,17 @@ async function runPipeline(provider) {
     const detail = (e.stderr ?? e.message ?? String(e)) || ''
     return { ok: false, phase: 'prepare', detail: truncate(detail, 600) }
   }
-  // 2) 跑完整 PSE 团队。
+  report('快照完成，启动 PSE 团队（Planner/Specialist/Evaluator，约 2-6 分钟）…')
+  // 2) 跑完整 PSE 团队：流式转发 verbose 日志作为实时进度。
   let stdout = ''
   try {
-    const run = await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/run.py'], {
-      cwd: AUTOGEN_PSE,
-      timeout: RUN_TIMEOUT_MS,
-      maxBuffer: 4 << 20,
-      env: runEnv,
-    })
-    stdout = run.stdout ?? ''
+    const out = await streamRun(provider, (line) => report(`[pse] ${line}`))
+    stdout = out.stdout
   } catch (e) {
     const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
     return { ok: false, phase: 'run', detail: truncate(tail, 800), stdout }
   }
+  report('团队分析完成，校验并保存报告…')
   // 3) 解析产物路径 → 校验可用性。
   const m = REVIEW_SAVED_RE.exec(stdout)
   if (!m?.[1]) {
@@ -125,9 +163,24 @@ async function runPipeline(provider) {
   return { ok: true, path: m[1], review }
 }
 
-async function pseReview(requestedProvider) {
+async function pseReview(requestedProvider, report) {
+  const reportBase = report ?? (() => {})
+  // 限制单次调用的进度消息条数与单条长度，避免刷爆 UI/套接字。
+  let n = 0
+  let ellipsized = false
+  const limited = (msg) => {
+    if (ellipsized) return
+    if (n >= 400) {
+      ellipsized = true
+      reportBase('…（进度日志较多，后续已省略）')
+      return
+    }
+    n++
+    const s = String(msg ?? '')
+    reportBase(s.length > 500 ? `${s.slice(0, 500)}…` : s)
+  }
   const provider = requestedProvider === 'deepseek' ? 'deepseek' : 'agnes'
-  const res = await runPipeline(provider)
+  const res = await runPipeline(provider, limited)
   const usedPaid = provider === 'deepseek'
   const paidNotice = usedPaid
     ? '\n⚠️ 注意：本次使用了 DeepSeek（付费模型）运行 PSE 深度分析，将产生 API 费用（约 ¥0.1–1/次）。\n'
@@ -174,9 +227,9 @@ runServer({
         required: [],
         additionalProperties: false,
       },
-      async run(args) {
+      async run(args, report) {
         const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'agnes'
-        return pseReview(raw === 'deepseek' ? 'deepseek' : 'agnes')
+        return pseReview(raw === 'deepseek' ? 'deepseek' : 'agnes', report)
       },
     },
   ],
