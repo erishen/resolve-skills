@@ -71,7 +71,10 @@ export async function runServer(spec) {
           }
           // 客户端若在 _meta.progressToken 里给了 token，就给 run 提供一个
           // report(msg) 用于发送进度通知（无 token 时为空操作，保持向后兼容）。
+          // 注意：MCP SDK 的 ProgressNotificationParamsSchema 要求 progress（number）
+          // 必填，因此必须带上自增的 progress，否则客户端按 schema 校验会丢弃该通知。
           const token = params?._meta?.progressToken
+          let progressSeq = 0
           const report =
             token !== undefined
               ? (message) =>
@@ -79,7 +82,11 @@ export async function runServer(spec) {
                     JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'notifications/progress',
-                      params: { progressToken: token, message: String(message) },
+                      params: {
+                        progressToken: token,
+                        progress: ++progressSeq,
+                        message: String(message),
+                      },
                     }) + '\n',
                   )
               : () => {}
