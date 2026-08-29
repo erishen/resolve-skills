@@ -40,6 +40,22 @@ async function copyReviewToSandbox(srcPath, content) {
   await writeFile(join(destDir, basename(srcPath)), content, 'utf8')
   return `sandbox/weekly-investment-review/${basename(srcPath)}`
 }
+
+// 校验产物是否可用：agnes 偶发卡死，可能写出空/残缺报告。
+// 必须同时满足：非空、含核心章节（最终结论/关键发现/建议操作）。
+function validateReview(text) {
+  const t = (text || '').trim()
+  if (t.length < 800) {
+    return { ok: false, reason: `内容过短（${t.length} 字符），agnes 疑似中途卡死未产出完整报告` }
+  }
+  const required = ['最终结论', '关键发现', '建议操作']
+  const missing = required.filter((k) => !t.includes(k))
+  if (missing.length) {
+    return { ok: false, reason: `缺少必要章节：${missing.join('、')}（agnes 可能中途卡死）` }
+  }
+  return { ok: true }
+}
+
 const PREPARE_TIMEOUT_MS = 180_000
 const RUN_TIMEOUT_MS = 480_000
 const MAX_OUTPUT = 48 * 1024
@@ -65,13 +81,8 @@ function buildRunEnv(provider) {
   return env
 }
 
-async function pseReview(provider) {
+async function runPipeline(provider) {
   const runEnv = buildRunEnv(provider)
-  const isPaid = provider === 'deepseek'
-  const notice = isPaid
-    ? '\n⚠️ 注意：本次使用 DeepSeek（付费模型）运行 PSE 深度分析，将产生 API 费用（约 ¥0.1–1/次）。如需免费可选 agnes，但 agnes 在当前多 Agent 流水线无法生成报告。\n'
-    : ''
-  if (isPaid) console.error(notice.trim())
   // 1) 重算快照 / 生成 prompt 文件（也刷新 asset-lens 收益）。
   try {
     await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/prepare.py'], {
@@ -82,7 +93,7 @@ async function pseReview(provider) {
     })
   } catch (e) {
     const detail = (e.stderr ?? e.message ?? String(e)) || ''
-      return `${notice}error: pse-review prepare step failed — ${truncate(detail, 600)}`
+    return { ok: false, phase: 'prepare', detail: truncate(detail, 600) }
   }
   // 2) 跑完整 PSE 团队。
   let stdout = ''
@@ -96,23 +107,56 @@ async function pseReview(provider) {
     stdout = run.stdout ?? ''
   } catch (e) {
     const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
-      return `${notice}error: pse-review run step failed — ${truncate(tail, 800)}`
+    return { ok: false, phase: 'run', detail: truncate(tail, 800), stdout }
   }
-  // 3) 优先返回已保存的周报全文，并落一份相对路径副本供 web 预览。
+  // 3) 解析产物路径 → 校验可用性。
   const m = REVIEW_SAVED_RE.exec(stdout)
-  if (m?.[1]) {
-    try {
-      const review = await readFile(m[1], { encoding: 'utf8' })
-      const rel = await copyReviewToSandbox(m[1], review)
-        return truncate(
-          `${notice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${m[1]}\n\n${review}`,
-          MAX_OUTPUT,
-        )
-    } catch {
-      // fall through：返回 run 的 stdout
-    }
+  if (!m?.[1]) {
+    return { ok: false, phase: 'no-file', stdout }
   }
-    return truncate(`${notice}${stdout || '(no output)'}`, MAX_OUTPUT)
+  let review = ''
+  try {
+    review = await readFile(m[1], { encoding: 'utf8' })
+  } catch {
+    return { ok: false, phase: 'read', path: m[1], stdout }
+  }
+  const v = validateReview(review)
+  if (!v.ok) return { ok: false, phase: 'invalid', reason: v.reason, path: m[1], review, stdout }
+  return { ok: true, path: m[1], review }
+}
+
+async function pseReview(requestedProvider) {
+  const provider = requestedProvider === 'deepseek' ? 'deepseek' : 'agnes'
+  let res = await runPipeline(provider)
+  let fellBack = false
+  // agnes 抽风（产物不可用）→ 自动切 deepseek（付费）兜底，保证出报告。
+  if (!res.ok && provider === 'agnes') {
+    fellBack = true
+    res = await runPipeline('deepseek')
+  }
+  const usedPaid = provider === 'deepseek' || fellBack
+  const paidNotice = usedPaid
+    ? '\n⚠️ 注意：本次使用了 DeepSeek（付费模型）运行 PSE 深度分析，将产生 API 费用（约 ¥0.1–1/次）。\n'
+    : ''
+  if (usedPaid) console.error(paidNotice.trim())
+  if (!res.ok) {
+    const fb = fellBack
+      ? '⚠️ agnes 本次抽风（产物不可用），已自动尝试 DeepSeek（付费）但同样失败。'
+      : ''
+    const detail = res.phase === 'invalid' ? res.reason : res.stdout || res.detail || '(no output)'
+    return truncate(
+      `${fb}${paidNotice}⚠️ 本次 PSE 分析失败（agnes 与 deepseek 均不可用）。\n\n${truncate(detail, 1200)}`,
+      MAX_OUTPUT,
+    )
+  }
+  const rel = await copyReviewToSandbox(res.path, res.review)
+  const fb = fellBack
+    ? '⚠️ agnes 本次抽风（产物不可用），已自动切换到 DeepSeek（付费）生成报告。\n'
+    : ''
+  return truncate(
+    `${fb}${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
+    MAX_OUTPUT,
+  )
 }
 
 runServer({
@@ -124,22 +168,22 @@ runServer({
       description:
         '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
         '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
-        '可选 provider："deepseek"（付费，默认，能生成完整深度报告）或 "agnes"（免费，但在当前多 Agent 流水线无法生成报告）。' +
-        '⚠️ 注意：deepseek 为付费模型，运行将产生 API 费用。',
+        '默认 provider="agnes"（免费）；若 agnes 抽风（产物经校验不可用），工具会自动切换到 deepseek（付费、稳定，约 ¥0.1–1/次）兜底并明确提示。' +
+        '也可显式指定 provider="deepseek" 直接用付费模型。',
       inputSchema: {
         type: 'object',
         properties: {
           provider: {
             type: 'string',
             enum: ['agnes', 'deepseek'],
-            description: "模型来源：deepseek（付费，默认，能生成完整深度报告）或 agnes（免费，但在当前多 Agent 流水线无法生成报告）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'deepseek'（付费）。",
+            description: "模型来源：agnes（免费，默认；抽风时工具自动切 deepseek 兜底）或 deepseek（付费、稳定，约 ¥0.1–1/次）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'agnes'（免费）。",
           },
         },
         required: [],
         additionalProperties: false,
       },
       async run(args) {
-        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'deepseek'
+        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'agnes'
         return pseReview(raw === 'deepseek' ? 'deepseek' : 'agnes')
       },
     },
