@@ -65,22 +65,41 @@ const REVIEW_SAVED_RE = /Review 已保存 →\s*(\S+)/
 
 const execFileAsync = promisify(execFile)
 
-// 模型来源显式化（对应 autogen-pse 的 make review-agnes / review-deepseek）：
-//  - agnes：免费、非流式；沿用当前进程 env 里的 agnes 凭据。
-//  - deepseek：付费（DeepSeek）；覆盖 model/base_url，并删掉 OPENAI_API_KEY，
-//    让 run.py 回退读 autogen-pse/.env 的 deepseek key（cwd=AUTOGEN_PSE）。
+// 从 autogen-pse/.env 读取键值（忽略注释/空行），失败返回 undefined。
+function dotenvValue(key) {
+  try {
+    const txt = fs.readFileSync(join(AUTOGEN_PSE, '.env'), 'utf8')
+    const m = txt.match(new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`, 'm'))
+    return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// 模型/凭据严格跟随 provider（对应 autogen-pse 的 make review-agnes / review-deepseek）：
+//  - agnes（免费、默认）：显式注入 AGNES_* 凭据。绝不能回退读 .env 的 OPENAI_MODEL，
+//    否则默认路径会悄悄变成 .env 里的付费模型（如 OPENAI_MODEL=deepseek-v4-flash）。
+//  - deepseek（付费）：显式注入 OPENAI_* 凭据。
+// 所有分支都写死 model/base_url/key，run.py 不依赖 .env 的默认 OPENAI_MODEL。
 function buildRunEnv(provider) {
   const env = { ...process.env }
   if (provider === 'deepseek') {
-    env.OPENAI_MODEL = 'deepseek-v4-flash'
-    env.OPENAI_BASE_URL = 'https://api.deepseek.com/v1'
-    delete env.OPENAI_API_KEY
+    env.OPENAI_MODEL = dotenvValue('OPENAI_MODEL') ?? 'deepseek-v4-flash'
+    env.OPENAI_BASE_URL = dotenvValue('OPENAI_BASE_URL') ?? 'https://api.deepseek.com/v1'
+    env.OPENAI_API_KEY = dotenvValue('OPENAI_API_KEY')
     env.PSE_MODEL_STREAM = 'true'
   } else {
+    env.OPENAI_MODEL = dotenvValue('AGNES_MODEL') ?? 'agnes-2.0-flash'
+    env.OPENAI_BASE_URL = dotenvValue('AGNES_BASE_URL') ?? 'https://apihub.agnes-ai.com/v1'
+    env.OPENAI_API_KEY = dotenvValue('AGNES_KEY')
     env.PSE_MODEL_STREAM = 'false'
   }
   return env
 }
+
+// 各 provider 期望的产物模型目录（run.py 按 settings.OPENAI_MODEL 分目录），
+// 用于交付前校验，杜绝"声明的 provider 与真实模型不符"的泄漏。
+const MODEL_DIR_BY_PROVIDER = { deepseek: 'deepseek-v4-flash', agnes: 'agnes-2.0-flash' }
 
 // 流式运行 run.py：逐行把 verbose 日志转发给 report（UI 实时进度），同时累积
 // stdout 以便解析「Review 已保存 →」产物路径；超时/非零退出时 reject。
@@ -152,6 +171,18 @@ async function runPipeline(provider, report = () => {}) {
   if (!m?.[1]) {
     return { ok: false, phase: 'no-file', stdout }
   }
+  // 兜底防线：产物必须落在请求 provider 的模型目录下。若 run.py 因 .env 的
+  // OPENAI_MODEL 泄漏而实际用了别的模型（如"默认 agnes"悄悄跑了 deepseek），
+  // 这里会拒绝交付，杜绝未经审批的付费模型跑单。
+  const expectDir = MODEL_DIR_BY_PROVIDER[provider]
+  if (!m[1].includes(`/${expectDir}/`)) {
+    return {
+      ok: false,
+      phase: 'provider-leak',
+      reason: `产物被写入 ${m[1]}，不在 provider=${provider} 的模型目录（${expectDir}）下，疑似 .env 泄漏导致实际调用了其他模型，拒绝交付。`,
+      stdout,
+    }
+  }
   let review = ''
   try {
     review = await readFile(m[1], { encoding: 'utf8' })
@@ -194,7 +225,10 @@ async function pseReview(requestedProvider, report) {
           '  · 重试 agnes（免费）：再次调用本工具，不传 provider。\n' +
           '  · 改用 DeepSeek（付费、稳定，约 ¥0.1–1/次，将触发审批）：传 provider="deepseek"。'
         : '⚠️ DeepSeek（付费）本次也失败，请稍后重试或检查 deepseek key。'
-    const detail = res.phase === 'invalid' ? res.reason : res.stdout || res.detail || '(no output)'
+    const detail =
+      res.phase === 'invalid' || res.phase === 'provider-leak'
+        ? res.reason ?? '(无具体原因)'
+        : res.stdout || res.detail || '(no output)'
     return truncate(`${hint}\n${paidNotice}\n${truncate(detail, 1200)}`, MAX_OUTPUT)
   }
   const rel = await copyReviewToSandbox(res.path, res.review)
