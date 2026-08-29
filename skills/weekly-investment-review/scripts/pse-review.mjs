@@ -6,9 +6,9 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import fs from 'node:fs'
 
 import { runServer, truncate } from './lib-mcp.mjs'
@@ -29,6 +29,17 @@ function findAutogenPse() {
 }
 
 const AUTOGEN_PSE = findAutogenPse()
+// Resolve the resolve-studio root (override via RESOLVE_STUDIO_DIR) so we can
+// drop a relative-path copy of the report under <studio>/sandbox/... that the
+// web UI can preview (within fsRoots).
+const STUDIO_ROOT =
+  process.env.RESOLVE_STUDIO_DIR ?? resolve(AUTOGEN_PSE, '../../', 'work', 'harness', 'resolve-studio')
+async function copyReviewToSandbox(srcPath, content) {
+  const destDir = join(STUDIO_ROOT, 'sandbox', 'weekly-investment-review')
+  await mkdir(destDir, { recursive: true })
+  await writeFile(join(destDir, basename(srcPath)), content, 'utf8')
+  return `sandbox/weekly-investment-review/${basename(srcPath)}`
+}
 const PREPARE_TIMEOUT_MS = 180_000
 const RUN_TIMEOUT_MS = 480_000
 const MAX_OUTPUT = 48 * 1024
@@ -82,12 +93,16 @@ async function pseReview(provider) {
     const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
     return `error: pse-review run step failed — ${truncate(tail, 800)}`
   }
-  // 3) 优先返回已保存的周报全文。
+  // 3) 优先返回已保存的周报全文，并落一份相对路径副本供 web 预览。
   const m = REVIEW_SAVED_RE.exec(stdout)
   if (m?.[1]) {
     try {
       const review = await readFile(m[1], { encoding: 'utf8' })
-      return truncate(`> PSE review saved to ${m[1]}\n\n${review}`, MAX_OUTPUT)
+      const rel = await copyReviewToSandbox(m[1], review)
+      return truncate(
+        `> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${m[1]}\n\n${review}`,
+        MAX_OUTPUT,
+      )
     } catch {
       // fall through：返回 run 的 stdout
     }

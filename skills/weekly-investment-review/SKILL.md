@@ -1,6 +1,6 @@
 ---
 name: weekly-investment-review
-description: 生成本地投资组合周报。先调 portfolio-summary 拿真实持仓快照摘要（Markdown），再按本流程输出结构化周报（组合概览 / 收益点评 / 风险警示 / 调仓建议）。适合回答「帮我看看这周投资情况」「生成投资周报」。
+description: 生成本地投资组合周报。先调 portfolio-check 做数据体检（刷新并扫描异常），再调 portfolio-summary 拿真实持仓快照摘要（Markdown），按本流程输出结构化周报（组合概览 / 收益点评 / 风险警示 / 调仓建议）。适合回答「帮我看看这周投资情况」「生成投资周报」。
 ---
 
 # 每周投资回顾（Weekly Investment Review）
@@ -11,10 +11,14 @@ description: 生成本地投资组合周报。先调 portfolio-summary 拿真实
 
 ## 步骤
 
+0. **数据体检（必做前置）**：先调用 `portfolio-check` 工具（只读、无审批）。它会在 asset-lens 项目里依次跑 `make calculate / make analyze / make compare` 刷新本地快照，并扫描异常（如年化收益率为天文数字、产品级离群值、内置风险提示），返回体检结论。
+   - 若返回 `error:` 或 ⚠️ 异常（尤其年化收益率出现 1e19% 这类失真值）：**先停下来**，把异常原样转述给用户，请其修复持仓数据（通常是某只产品投资天数过短导致年化被放大），**不要**继续后续 review。
+   - 体检通过（加权年化 / 整体收益正常、无离群值）再进入下一步。
+
 1. **调工具拿摘要**：调用 `portfolio-summary` 工具（只读、无审批），得到结构化的组合摘要 Markdown（含组合概览 / 自动检测问题 / 黄金与房产快照 / 汇率 / 定投审查 / 资产配置 / 持仓明细 / 风险分布 / 市场行情 / 投资效率 / 时间分组 / 任务提示）。
 
-> **工具来源**：`portfolio-summary` 与 `pse-review` 是本技能自带的 MCP 桥（见 `${SKILL_DIR}/scripts/`，
-> 零依赖 Node stdio server，桥接 autogen-pse 数据管线）。你的 harness 若没注册这两个工具
+> **工具来源**：`portfolio-check`、`portfolio-summary` 与 `pse-review` 是本技能自带的 MCP 桥（见 `${SKILL_DIR}/scripts/`，
+> 零依赖 Node stdio server，桥接 autogen-pse / asset-lens 数据管线）。你的 harness 若没注册这三个工具
 > （resolve-tui 在 config.toml `[mcp_servers]`、Claude Code 在 `.mcp.json`），先照
 > `${SKILL_DIR}/scripts/README.md` 注册，否则本技能无法取到真实持仓数据。
 
@@ -32,6 +36,7 @@ description: 生成本地投资组合周报。先调 portfolio-summary 拿真实
 
 ## 注意事项
 
+- `portfolio-check` 会跑完整的 `make calculate / analyze / compare`（刷新 + 扫描），首次运行可能耗时 1-3 分钟，属正常；它已能独立兜底数据异常（年化 > 10000% 即判失真），但资产护栏（`asset-lens` 内的 ANNUAL_RETURN_PLAUSIBLE_CAP）才是根本修复。
 - `portfolio-summary` 内部会重算资产收益（asset-lens `make calculate`），首次运行可能耗时 1-2 分钟，属正常。
 - **深度版**：若用户要「正式/严谨的周报」（知识库 + 多 Agent 评估），改用 `pse-review` 工具——它跑完整 PSE 管线（Planner/Specialist/Evaluator + 个人知识库检索），耗时 2-6 分钟。
   - 模型由 `tool-pse-review` 插件的 `config.provider` 显式决定（默认 `agnes`=免费非流式；设为 `deepseek`=付费流式质量更高）。切换在 `cordis.openai.web.yml` 的 `tool-pse-review.config.provider` 或环境变量 `PSE_REVIEW_PROVIDER` 里改，不要用 `make review-*` 那套（harness 直接跑 `run.py`，不经过 Makefile target）。

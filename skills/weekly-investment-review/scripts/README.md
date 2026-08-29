@@ -1,15 +1,17 @@
 # weekly-investment-review 工具桥（MCP stdio）
 
-本技能依赖两个**本地私有数据**工具：`portfolio-summary`（快速摘要）与 `pse-review`
-（深度 PSE 周报）。为了让任意 harness（resolve-tui / Claude Code / Codex）都能拿到
-这组工具，这里用**零依赖 Node MCP stdio server** 把它们桥接出来——共用同一个数据源
-autogen-pse，与 resolve-studio 插件的取数逻辑一致。
+本技能依赖三个**本地私有数据**工具：`portfolio-check`（投资前数据体检）、
+`portfolio-summary`（快速摘要）与 `pse-review`（深度 PSE 周报）。为了让任意
+harness（resolve-tui / Claude Code / Codex）都能拿到这组工具，这里用**零依赖 Node
+MCP stdio server** 把它们桥接出来——共用同一个数据源 autogen-pse / asset-lens，与
+resolve-studio 插件的取数逻辑一致。
 
 ## 文件
 
 | 文件 | 作用 |
 |---|---|
 | `lib-mcp.mjs` | 零依赖 MCP stdio 协议骨架（JSON-RPC 2.0） |
+| `portfolio-check.mjs` | 工具 `portfolio-check`：在 asset-lens 跑 `make calculate / analyze / compare` 刷新快照并扫描异常（只读，耗时 1-3 分钟） |
 | `portfolio-summary.mjs` | 工具 `portfolio-summary`：`prepare.py --print` 出组合摘要（只读，耗时 1-2 分钟） |
 | `pse-review.mjs` | 工具 `pse-review`：`prepare.py` + `run.py` 出完整 PSE 周报（2-6 分钟，会调模型） |
 
@@ -26,6 +28,10 @@ autogen-pse，与 resolve-studio 插件的取数逻辑一致。
 加两段（脚本路径换成你机器上的实际路径）：
 
 ```toml
+[mcp_servers.portfolio-check]
+command = "node"
+args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/portfolio-check.mjs"]
+
 [mcp_servers.portfolio-summary]
 command = "node"
 args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/portfolio-summary.mjs"]
@@ -48,6 +54,10 @@ env = { PSE_REVIEW_PROVIDER = "agnes" }   # 可选表项
     "portfolio-summary": {
       "command": "node",
       "args": ["/你的路径/.../scripts/portfolio-summary.mjs"]
+    },
+    "portfolio-check": {
+      "command": "node",
+      "args": ["/你的路径/.../scripts/portfolio-check.mjs"]
     }
   }
 }
