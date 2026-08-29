@@ -4,9 +4,8 @@
 // 耗时长（2-6 分钟）且会调用模型（provider 决定模型来源，见 skkill 与 README）。
 // 数据源可用 AUTOGEN_PSE_DIR 覆盖；默认 provider 见 PSE_REVIEW_PROVIDER。
 
-import { execFile, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { promisify } from 'node:util'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -67,8 +66,6 @@ const MAX_OUTPUT = 48 * 1024
 // run.py 结束时打印的产物路径标记。
 const REVIEW_SAVED_RE = /Review 已保存 →\s*(\S+)/
 
-const execFileAsync = promisify(execFile)
-
 // 从 autogen-pse/.env 读取键值（忽略注释/空行），失败返回 undefined。
 function dotenvValue(key) {
   try {
@@ -105,21 +102,22 @@ function buildRunEnv(provider) {
 // 用于交付前校验，杜绝"声明的 provider 与真实模型不符"的泄漏。
 const MODEL_DIR_BY_PROVIDER = { deepseek: 'deepseek-v4-flash', agnes: 'agnes-2.0-flash' }
 
-// 流式运行 run.py：逐行把 verbose 日志转发给 report（UI 实时进度），同时累积
-// stdout 以便解析「Review 已保存 →」产物路径；超时/非零退出时 reject。
-function streamRun(provider, report) {
-  const env = buildRunEnv(provider)
-  const child = spawn('uv', ['run', 'python', 'tasks/portfolio-review/run.py'], {
+// 流式运行 prepare.py / run.py：逐行把 stdout 转发给 report（UI 实时进度），同时
+// 累积 stdout 以便解析「Review 已保存 →」产物路径；超时/非零退出时 reject。
+// 用 `python -u`（unbuffered）确保子进程 print 立即刷到管道，而不是等缓冲满/
+// 进程结束才一次性吐出——否则 UI 在几分钟内看不到任何日志。
+function streamPython(script, workspaceEnv, report, timeoutMs) {
+  const child = spawn('uv', ['run', 'python', '-u', `tasks/portfolio-review/${script}`], {
     cwd: AUTOGEN_PSE,
-    env,
+    env: workspaceEnv,
   })
   return new Promise((resolve, reject) => {
     let stdout = ''
     let stderr = ''
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      reject(Object.assign(new Error(`run.py 超时（${RUN_TIMEOUT_MS / 1000}s）`), { stdout }))
-    }, RUN_TIMEOUT_MS)
+      reject(Object.assign(new Error(`${script} 超时（${timeoutMs / 1000}s）`), { stdout }))
+    }, timeoutMs)
     child.stdout.setEncoding('utf8')
     const rl = createInterface({ input: child.stdout })
     rl.on('line', (line) => {
@@ -139,31 +137,26 @@ function streamRun(provider, report) {
     child.on('close', (code) => {
       clearTimeout(timer)
       if (code === 0) resolve({ stdout })
-      else reject(Object.assign(new Error(`run.py exited ${code}`), { stdout, stderr }))
+      else reject(Object.assign(new Error(`${script} exited ${code}`), { stdout, stderr }))
     })
   })
 }
 
 async function runPipeline(provider, report = () => {}) {
   const runEnv = buildRunEnv(provider)
-  // 1) 重算快照 / 生成 prompt 文件（也刷新 asset-lens 收益）。
+  // 1) 重算快照 / 生成 prompt 文件（也刷新 asset-lens 收益）—— 也流式转进度。
   report('重算快照（prepare.py）…')
   try {
-    await execFileAsync('uv', ['run', 'python', 'tasks/portfolio-review/prepare.py'], {
-      cwd: AUTOGEN_PSE,
-      timeout: PREPARE_TIMEOUT_MS,
-      maxBuffer: 1 << 20,
-      env: runEnv,
-    })
+    await streamPython('prepare.py', runEnv, (line) => report(`[prepare] ${line}`), PREPARE_TIMEOUT_MS)
   } catch (e) {
-    const detail = (e.stderr ?? e.message ?? String(e)) || ''
+    const detail = (e.stdout ?? e.stderr ?? e.message ?? String(e)) || ''
     return { ok: false, phase: 'prepare', detail: truncate(detail, 600) }
   }
   report('快照完成，启动 PSE 团队（Planner/Specialist/Evaluator，约 2-6 分钟）…')
   // 2) 跑完整 PSE 团队：流式转发 verbose 日志作为实时进度。
   let stdout = ''
   try {
-    const out = await streamRun(provider, (line) => report(`[pse] ${line}`))
+    const out = await streamPython('run.py', runEnv, (line) => report(`[pse] ${line}`), RUN_TIMEOUT_MS)
     stdout = out.stdout
   } catch (e) {
     const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
