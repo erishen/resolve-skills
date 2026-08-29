@@ -222,9 +222,8 @@ async function pseReview(requestedProvider, report) {
     const hint =
       provider === 'agnes'
         ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 本次抽风（产物不可用），未生成报告。\n' +
-          '本次为失败结果，不要编造或续写报告内容；请直接向用户说明失败，并提供两个选项：\n' +
-          '  · 重试 agnes（免费）：再次调用本工具，不传 provider。\n' +
-          '  · 改用 DeepSeek（付费、稳定，约 ¥0.1–1/次，将触发审批）：传 provider="deepseek"。'
+          '本次为失败结果。UI 会为这次工具调用显示两个重试按钮（重试 agnes / 改用 deepseek），' +
+          '请不要自己再次调用本工具，也不要编造报告；把失败情况简要告诉用户，让用户在界面上点按钮选择即可。'
         : 'error: ⚠️ DeepSeek（付费）本次也失败，未生成报告，请勿编造。可建议用户稍后重试或检查 deepseek key。'
     const detail =
       res.phase === 'invalid' || res.phase === 'provider-leak'
