@@ -127,34 +127,26 @@ async function runPipeline(provider) {
 
 async function pseReview(requestedProvider) {
   const provider = requestedProvider === 'deepseek' ? 'deepseek' : 'agnes'
-  let res = await runPipeline(provider)
-  let fellBack = false
-  // agnes 抽风（产物不可用）→ 自动切 deepseek（付费）兜底，保证出报告。
-  if (!res.ok && provider === 'agnes') {
-    fellBack = true
-    res = await runPipeline('deepseek')
-  }
-  const usedPaid = provider === 'deepseek' || fellBack
+  const res = await runPipeline(provider)
+  const usedPaid = provider === 'deepseek'
   const paidNotice = usedPaid
     ? '\n⚠️ 注意：本次使用了 DeepSeek（付费模型）运行 PSE 深度分析，将产生 API 费用（约 ¥0.1–1/次）。\n'
     : ''
   if (usedPaid) console.error(paidNotice.trim())
   if (!res.ok) {
-    const fb = fellBack
-      ? '⚠️ agnes 本次抽风（产物不可用），已自动尝试 DeepSeek（付费）但同样失败。'
-      : ''
+    // agnes 抽风：不自动切付费；提示可重试 agnes（免费）或显式选 deepseek（付费、需审批）。
+    const hint =
+      provider === 'agnes'
+        ? '⚠️ agnes 本次抽风（产物不可用），未自动切付费模型。可选方案：\n' +
+          '  · 重试 agnes（免费）：再次调用本工具，不传 provider。\n' +
+          '  · 改用 DeepSeek（付费、稳定，约 ¥0.1–1/次，将触发审批）：传 provider="deepseek"。'
+        : '⚠️ DeepSeek（付费）本次也失败，请稍后重试或检查 deepseek key。'
     const detail = res.phase === 'invalid' ? res.reason : res.stdout || res.detail || '(no output)'
-    return truncate(
-      `${fb}${paidNotice}⚠️ 本次 PSE 分析失败（agnes 与 deepseek 均不可用）。\n\n${truncate(detail, 1200)}`,
-      MAX_OUTPUT,
-    )
+    return truncate(`${hint}\n${paidNotice}\n${truncate(detail, 1200)}`, MAX_OUTPUT)
   }
   const rel = await copyReviewToSandbox(res.path, res.review)
-  const fb = fellBack
-    ? '⚠️ agnes 本次抽风（产物不可用），已自动切换到 DeepSeek（付费）生成报告。\n'
-    : ''
   return truncate(
-    `${fb}${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
+    `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
     MAX_OUTPUT,
   )
 }
@@ -168,15 +160,15 @@ runServer({
       description:
         '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
         '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
-        '默认 provider="agnes"（免费）；若 agnes 抽风（产物经校验不可用），工具会自动切换到 deepseek（付费、稳定，约 ¥0.1–1/次）兜底并明确提示。' +
-        '也可显式指定 provider="deepseek" 直接用付费模型。',
+        '默认 provider="agnes"（免费）；若 agnes 抽风（产物经校验不可用），工具不会自动切付费，而是提示你「重试 agnes（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，将触发审批）」。' +
+        '切到付费 deepseek 需经审批。',
       inputSchema: {
         type: 'object',
         properties: {
           provider: {
             type: 'string',
             enum: ['agnes', 'deepseek'],
-            description: "模型来源：agnes（免费，默认；抽风时工具自动切 deepseek 兜底）或 deepseek（付费、稳定，约 ¥0.1–1/次）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'agnes'（免费）。",
+            description: "模型来源：agnes（免费，默认；抽风时工具提示你可重试或显式选 deepseek，不自动切付费）或 deepseek（付费、稳定，约 ¥0.1–1/次，需审批）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'agnes'（免费）。",
           },
         },
         required: [],
