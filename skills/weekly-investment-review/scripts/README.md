@@ -14,7 +14,7 @@ Codex）都能拿到这组工具，这里用**零依赖 Node MCP stdio server** 
 |---|---|
 | `lib-mcp.mjs` | 零依赖 MCP stdio 协议骨架（JSON-RPC 2.0，支持 progress 通知） |
 | `portfolio-check.mjs` | 工具 `portfolio-check`：在 asset-lens 跑 `make calculate / analyze / compare` 刷新快照并扫描异常（只读，耗时 1-3 分钟） |
-| `pse-review.mjs` | 工具 `pse-review`：`prepare.py` + `run.py` 出完整 PSE 周报（2-6 分钟，会调模型；agnes 抽风时返回 `error: PSE_RETRY_CHOICE` 供 UI 渲染重试选项） |
+| `pse-review.mjs` | 工具 `pse-review`：`prepare.py` + `run.py` 出完整 PSE 周报（2-6 分钟，会调模型；免费默认模型偶发抽风时返回 `error: PSE_RETRY_CHOICE` 供 UI 渲染重试选项） |
 
 依赖：`node >= 18`、`uv`、autogen-pse 项目（含 `tasks/portfolio-review/`）。
 
@@ -36,7 +36,7 @@ args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-revi
 [mcp_servers.pse-review]
 command = "node"
 args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/pse-review.mjs"]
-env = { PSE_REVIEW_PROVIDER = "agnes" }   # 可选表项
+env = { PSE_REVIEW_PROVIDER = "default" }   # 可选：省略或填 "default" 走免费默认 OpenAI 兼容网关；"deepseek" 走付费模型
 ```
 
 启动后 `resolve-tui` 会连上这两个 server，工具以 `mcp_<server>_<tool>` 暴露给模型。
@@ -68,7 +68,7 @@ env = { PSE_REVIEW_PROVIDER = "agnes" }   # 可选表项
 
 `portfolio-check` / `pse-review` 的输出含**真实持仓、金额、收益率**。仅供本地私有
 使用：不要把摘要/周报原样外发、写入公开仓库。周报生成过程对 `deepseek` 提供商会产生
-模型费用（读取 autogen-pse/.env 的 key）；默认 `agnes` 免费。
+模型费用（读取 autogen-pse/.env 的 key）；默认由免费默认 OpenAI 兼容网关提供，无费用。
 
 ## 直接调试
 

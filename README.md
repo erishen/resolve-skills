@@ -63,7 +63,7 @@ See [`.env.example`](./.env.example) for all available variables. Key variables:
 | `PROD_WORDPRESS_APP_PASSWORD` | WordPress application password (for `post-comment` skill) |
 | `ERISHEN_BASE` | Optional: override blog base URL (default `https://example.com` — set to your WordPress site) |
 | `AUTOGEN_PSE_DIR` | Optional: override path to autogen-pse (for `weekly-investment-review` skill) |
-| `PSE_REVIEW_PROVIDER` | Optional: `agnes` (free, default) or `deepseek` (paid) for PSE review |
+| `PSE_REVIEW_PROVIDER` | Optional: free default model (OpenAI-compatible gateway) or `deepseek` (paid) for PSE review |
 
 > **Privacy**: `.env` is gitignored. Never commit real credentials. `.env.example` contains only placeholders.
 

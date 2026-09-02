@@ -63,7 +63,7 @@ cp .env.example .env
 | `PROD_WORDPRESS_APP_PASSWORD` | WordPress 应用密码（`post-comment` 技能用） |
 | `ERISHEN_BASE` | 可选：覆盖博客 base URL（默认 `https://example.com`，改为你的 WordPress 站点） |
 | `AUTOGEN_PSE_DIR` | 可选：覆盖 autogen-pse 路径（`weekly-investment-review` 技能用） |
-| `PSE_REVIEW_PROVIDER` | 可选：`agnes`（免费，默认）或 `deepseek`（付费）用于 PSE 回顾 |
+| `PSE_REVIEW_PROVIDER` | 可选：免费默认模型（OpenAI 兼容网关）或 `deepseek`（付费）用于 PSE 回顾 |
 
 > **隐私**：`.env` 已被 gitignore 忽略，永远不要提交真实凭据。`.env.example` 仅含占位符。
 

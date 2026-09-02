@@ -19,7 +19,7 @@ triggers: 投资, 投资周报, 投资情况, 周报, portfolio, 持仓, 复盘,
    - 体检通过（加权年化 / 整体收益正常、无离群值）再进入下一步。
 
 1. **生成深度周报**：调用 `pse-review` 工具（见 `${SKILL_DIR}/scripts/`）。它会重算快照并运行 Planner/Specialist/Evaluator 三角色团队 + 个人知识库检索，产出完整周报 Markdown（含组合概览 / 自动检测问题 / 黄金与房产快照 / 汇率 / 资产配置 / 持仓明细 / 风险分布 / 市场行情 / 投资效率 / 收益点评 / 调仓建议）。耗时 2-6 分钟。
-   - 若返回 `error:` 开头（如 agnes 抽风 `PSE_RETRY_CHOICE`）：**不要编造报告内容**，把失败原因原样转述给用户，并给出选项——重试 agnes（免费）或改用 deepseek（付费，会触发审批）。
+   - 若返回 `error:` 开头（如免费默认模型偶发抽风 `PSE_RETRY_CHOICE`）：**不要编造报告内容**，把失败原因原样转述给用户，并给出选项——重试免费默认模型（OpenAI 兼容网关）或改用 deepseek（付费，会触发审批）。
    - 报告文件会落到 `sandbox/weekly-investment-review/<模型>__weekly_review_<日期>.md`，可让用户预览。
 
 > **工具来源**：`portfolio-check` 与 `pse-review` 是本技能自带的 MCP 桥（见 `${SKILL_DIR}/scripts/`，
@@ -43,7 +43,7 @@ triggers: 投资, 投资周报, 投资情况, 周报, portfolio, 持仓, 复盘,
 
 - `portfolio-check` 会跑完整的 `make calculate / analyze / compare`（刷新 + 扫描），首次运行可能耗时 1-3 分钟，属正常；它已能独立兜底数据异常（年化 > 10000% 即判失真），但资产护栏（`asset-lens` 内的 ANNUAL_RETURN_PLAUSIBLE_CAP）才是根本修复。
 - `pse-review` 会重算资产收益并跑完整 PSE 三角色（Planner/Specialist/Evaluator + 个人知识库检索），耗时 2-6 分钟，属正常。
-  - 模型由 `pse-review` 的 `provider` 参数决定（默认 `agnes`=免费非流式；传 `deepseek`=付费流式质量更高）。
-  - agnes 免费、非流式，但偶发抽风（返回 `PSE_RETRY_CHOICE`）；deepseek 走 autogen-pse/.env 的 key，会产生费用。务必在周报里告知用户本次用的是哪个模型。
+  - 模型由 `pse-review` 的 `provider` 参数决定（默认=免费默认模型，OpenAI 兼容网关、非流式；传 `deepseek`=付费流式质量更高）。
+  - 免费默认模型免费、非流式，但偶发抽风（返回 `PSE_RETRY_CHOICE`）；deepseek 走 autogen-pse/.env 的 key，会产生费用。务必在周报里告知用户本次用的是哪个模型。
 - 若工具返回 `error:` 前缀：说明收益计算管线失败（多为数据快照过期或缺依赖），**原样转述错误**，不要编造数据。
 - 不要修改/生成任何持仓 CSV 或资产文件——本技能只读。
