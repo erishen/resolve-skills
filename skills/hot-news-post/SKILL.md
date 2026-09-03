@@ -17,10 +17,12 @@ Planner/Specialist/Evaluator 三角色 + 每轮确定性合规核查，产出带
 **执行原则：在调用 `hot-news` 工具并拿到成稿（或确定失败、需要用户选择）之前，不要结束本轮回复。**
 每一步都通过调用对应工具推进，不要只输出声明性文本就收尾。
 
-0. **（可选前置）抓取新闻**：若用户提供了新闻链接或要求基于真实新闻，先用 `browser-open` /
-   `browser-screenshot`（resolve-studio 内置）抓取相关新闻正文，落盘为一个目录（如 `/tmp/news-<topic>/`），
-   每个新闻一个 `.md`。这一步是 RAG grounding 的事实来源——**强烈建议提供**，否则流水线降级为纯主题生成，
-   丢失事实对照能力。
+0. **（可选前置）抓取新闻**：需要真实新闻做 RAG grounding 时，**优先调用 `hot-news-fetch`**
+   工具（流水线内置的多平台抓取，自动落盘到快照目录，`hot-news` 会自动用作 grounding 源）。
+   仅当用户明确提供了特定新闻链接、需要补充抓取时，才考虑用 `browser-open` /
+   `browser-screenshot`（resolve-studio 内置，只读无审批）打开该链接并把正文落盘为
+   一个目录（如 `/tmp/news-<topic>/`），每个新闻一个 `.md`，再通过 `news_dir` 传给 `hot-news`。
+   若跳过此步，流水线降级为纯主题生成，丢失事实对照能力。
 
 1. **生成合规文案**：调用 `hot-news` 工具。
    - `topic`：热点主题（必填）。
@@ -28,8 +30,11 @@ Planner/Specialist/Evaluator 三角色 + 每轮确定性合规核查，产出带
    - `platform`：`xiaohongshu`（默认）/ `douyin` / `zhihu` / `toutiao`。
    - `category`：品类，决定违禁词表松紧。`tech_ai`（默认，最宽松，适合技术个人 IP）/ `beauty` / `food` /
      `education` / `finance` / `medical` / `ecommerce`。金融/医疗为高危品类，词表从严。
-   - `provider`：`deepseek`（默认，公有模型）/ 免费默认模型（OpenAI 兼容网关）/ 其它 OpenAI 兼容备选模型。
-   - 流水线耗时 1-4 分钟。产物默认落 `tasks/hot-news/hot_news_<platform>_<provider>.md`。
+   - `provider`：默认 `agnes`（免费，无需审批）。`deepseek` / `scnet-kimi` / `scnet-minimax`
+     为付费网关，显式指定需人工审批——后台任务应保持默认 `agnes`，不要主动传付费 provider。
+   - 流水线耗时 1-4 分钟。产物经工具读取回传完整 Markdown（文件落
+     `<HARNESS_PSE_DIR>/tasks/hot-news/articles/hot_news_<platform>_<provider>.md`，
+     无需自行拼接路径）。
    - 若返回 `error:` 开头：原样转述错误，不要编造文案内容。
 
 2. **呈现文案**：工具会回传完整 Markdown。向用户展示时说明：
