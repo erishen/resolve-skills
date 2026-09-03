@@ -35,14 +35,14 @@ const AUTOGEN_PSE = findAutogenPse()
 const STUDIO_ROOT =
   process.env.RESOLVE_STUDIO_DIR ?? resolve(AUTOGEN_PSE, '../../', 'work', 'harness', 'resolve-studio')
 async function copyReviewToSandbox(srcPath, content) {
-  const destDir = join(STUDIO_ROOT, 'sandbox', 'weekly-investment-review')
+  const destDir = join(STUDIO_ROOT, 'sandbox', 'weekly-investment')
   await mkdir(destDir, { recursive: true })
   // 产物路径形如 output/<model>/weekly_review_<date>.md —— 把模型目录名嵌入副本
   // 文件名，避免不同模型（agnes / deepseek）同一天的报告互相覆盖。
   const modelDir = basename(dirname(srcPath))
   const destName = `${modelDir}__${basename(srcPath)}`
   await writeFile(join(destDir, destName), content, 'utf8')
-  return `sandbox/weekly-investment-review/${destName}`
+  return `sandbox/weekly-investment/${destName}`
 }
 
 // 校验产物是否可用：agnes 偶发卡死，可能写出空/残缺报告。

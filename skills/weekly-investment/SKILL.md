@@ -20,7 +20,7 @@ triggers: 投资, 投资周报, 投资情况, 周报, portfolio, 持仓, 复盘,
 
 1. **生成深度周报**：调用 `pse-review` 工具（见 `${SKILL_DIR}/scripts/`）。它会重算快照并运行 Planner/Specialist/Evaluator 三角色团队 + 个人知识库检索，产出完整周报 Markdown（含组合概览 / 自动检测问题 / 黄金与房产快照 / 汇率 / 资产配置 / 持仓明细 / 风险分布 / 市场行情 / 投资效率 / 收益点评 / 调仓建议）。耗时 2-6 分钟。
    - 若返回 `error:` 开头（如免费默认模型偶发抽风 `PSE_RETRY_CHOICE`）：**不要编造报告内容**，把失败原因原样转述给用户，并给出选项——重试免费默认模型（OpenAI 兼容网关）或改用 deepseek（付费，会触发审批）。
-   - 报告文件会落到 `sandbox/weekly-investment-review/<模型>__weekly_review_<日期>.md`，可让用户预览。
+   - 报告文件会落到 `sandbox/weekly-investment/<模型>__weekly_review_<日期>.md`，可让用户预览。
 
 > **工具来源**：`portfolio-check` 与 `pse-review` 是本技能自带的 MCP 桥（见 `${SKILL_DIR}/scripts/`，
 > 零依赖 Node stdio server，桥接 autogen-pse / asset-lens 数据管线）。你的 harness 若没注册这两个工具

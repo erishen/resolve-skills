@@ -1,4 +1,4 @@
-# weekly-investment-review 工具桥（MCP stdio）
+# weekly-investment 工具桥（MCP stdio）
 
 本技能依赖两个**本地私有数据**工具：`portfolio-check`（投资前数据体检）与
 `pse-review`（深度 PSE 周报）。为了让任意 harness（resolve-tui / Claude Code /
@@ -31,11 +31,11 @@ Codex）都能拿到这组工具，这里用**零依赖 Node MCP stdio server** 
 ```toml
 [mcp_servers.portfolio-check]
 command = "node"
-args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/portfolio-check.mjs"]
+args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment/scripts/portfolio-check.mjs"]
 
 [mcp_servers.pse-review]
 command = "node"
-args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment-review/scripts/pse-review.mjs"]
+args = ["/你的路径/work/harness/resolve-skills/skills/weekly-investment/scripts/pse-review.mjs"]
 env = { PSE_REVIEW_PROVIDER = "default" }   # 可选：省略或填 "default" 走免费默认 OpenAI 兼容网关；"deepseek" 走付费模型
 ```
 
