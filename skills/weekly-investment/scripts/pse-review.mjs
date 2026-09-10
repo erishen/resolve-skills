@@ -1,8 +1,9 @@
 // pse-review 工具：MCP stdio 桥。
 // 包装 autogen-pse 完整 PSE 管线：prepare.py（重算快照）→ run.py（
 // Planner/Specialist/Evaluator 团队 + 个人知识库检索）→ 返回已保存的完整周报。
-// 耗时长（2-6 分钟）且会调用模型（provider 决定模型来源，见 skkill 与 README）。
-// 数据源可用 AUTOGEN_PSE_DIR 覆盖；默认 provider 见 PSE_REVIEW_PROVIDER。
+// 耗时长（2-6 分钟）且会调用模型（provider 决定模型来源，见 buildRunEnv 与 README）。
+// 默认 provider 走 llm-router 网关（ROUTER_* 配置在 autogen-pse/.env，场景路由 fast 为免费池）；
+// 可用 PSE_REVIEW_PROVIDER 环境变量覆盖。数据源可用 AUTOGEN_PSE_DIR 覆盖。
 
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
@@ -78,13 +79,22 @@ function dotenvValue(key) {
 }
 
 // 模型/凭据严格跟随 provider（对应 autogen-pse 的 make review-agnes / review-deepseek）：
-//  - agnes（免费、默认）：显式注入 AGNES_* 凭据。绝不能回退读 .env 的 OPENAI_MODEL，
+//  - router（默认、免费）：走 llm-router 网关（http://localhost:9070/v1）的场景路由
+//     模型（默认 "fast"，agnres-2.5→2.0→sensenova 自动 failover、429 限流自动降级），
+//     不直接打厂商 API，key 统一由网关管理。
+//  - agnes（免费、直连）：显式注入 AGNES_* 凭据。绝不能回退读 .env 的 OPENAI_MODEL，
 //    否则默认路径会悄悄变成 .env 里的付费模型（如 OPENAI_MODEL=deepseek-v4-flash）。
 //  - deepseek（付费）：显式注入 OPENAI_* 凭据。
 // 所有分支都写死 model/base_url/key，run.py 不依赖 .env 的默认 OPENAI_MODEL。
+// 产物模型目录统一 = 注入的 OPENAI_MODEL（run.py 按 settings.OPENAI_MODEL 分目录）。
 function buildRunEnv(provider) {
   const env = { ...process.env }
-  if (provider === 'deepseek') {
+  if (provider === 'router') {
+    env.OPENAI_MODEL = dotenvValue('ROUTER_MODEL') ?? 'fast'
+    env.OPENAI_BASE_URL = dotenvValue('ROUTER_BASE_URL') ?? 'http://localhost:9070/v1'
+    env.OPENAI_API_KEY = dotenvValue('ROUTER_API_KEY')
+    env.PSE_MODEL_STREAM = 'true'
+  } else if (provider === 'deepseek') {
     env.OPENAI_MODEL = dotenvValue('OPENAI_MODEL') ?? 'deepseek-v4-flash'
     env.OPENAI_BASE_URL = dotenvValue('OPENAI_BASE_URL') ?? 'https://api.deepseek.com/v1'
     env.OPENAI_API_KEY = dotenvValue('OPENAI_API_KEY')
@@ -97,10 +107,6 @@ function buildRunEnv(provider) {
   }
   return env
 }
-
-// 各 provider 期望的产物模型目录（run.py 按 settings.OPENAI_MODEL 分目录），
-// 用于交付前校验，杜绝"声明的 provider 与真实模型不符"的泄漏。
-const MODEL_DIR_BY_PROVIDER = { deepseek: 'deepseek-v4-flash', agnes: 'agnes-2.0-flash' }
 
 // 流式运行 prepare.py / run.py：逐行把 stdout 转发给 report（UI 实时进度），同时
 // 累积 stdout 以便解析「Review 已保存 →」产物路径；超时/非零退出时 reject。
@@ -171,7 +177,8 @@ async function runPipeline(provider, report = () => {}) {
   // 兜底防线：产物必须落在请求 provider 的模型目录下。若 run.py 因 .env 的
   // OPENAI_MODEL 泄漏而实际用了别的模型（如"默认 agnes"悄悄跑了 deepseek），
   // 这里会拒绝交付，杜绝未经审批的付费模型跑单。
-  const expectDir = MODEL_DIR_BY_PROVIDER[provider]
+  // 期望目录 = 注入的 OPENAI_MODEL（router 模式是网关场景名如 fast/chat）。
+  const expectDir = runEnv.OPENAI_MODEL.split('/').pop()
   if (!m[1].includes(`/${expectDir}/`)) {
     return {
       ok: false,
@@ -207,7 +214,14 @@ async function pseReview(requestedProvider, report) {
     const s = String(msg ?? '')
     reportBase(s.length > 500 ? `${s.slice(0, 500)}…` : s)
   }
-  const provider = requestedProvider === 'deepseek' ? 'deepseek' : 'agnes'
+  // 默认走 router：llm-router 网关免费场景路由（fast → agnes 免费，429 限流自动降级），
+  // 不直连厂商 API。agnres / deepseek 为显式回退/付费选项。
+  const provider =
+    requestedProvider === 'deepseek'
+      ? 'deepseek'
+      : requestedProvider === 'agnes'
+        ? 'agnes'
+        : 'router'
   const res = await runPipeline(provider, limited)
   const usedPaid = provider === 'deepseek'
   const paidNotice = usedPaid
@@ -215,16 +229,20 @@ async function pseReview(requestedProvider, report) {
     : ''
   if (usedPaid) console.error(paidNotice.trim())
   if (!res.ok) {
-    // agnes 抽风：不自动切付费；提示可重试 agnes（免费）或显式选 deepseek（付费、需审批）。
+    // 走 llm-router 也失败：提示可显式选 agnes 直连/付费 deepseek，或稍后重试。
     // 注意：必须以 `error: ` 开头（harness 据此判定 ok=false），否则 agent 会把这个
     // 失败当成工具成功，继续编造「分析已完成」报告。哨兵行 PSE_RETRY_CHOICE 用于前端
     // ToolCallCard 渲染两个重试按钮。
     const hint =
       provider === 'agnes'
-        ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 本次抽风（产物不可用），未生成报告。\n' +
+        ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 直连本次抽风（产物不可用），未生成报告。\n' +
           '本次为失败结果。UI 会为这次工具调用显示两个重试按钮（重试 agnes / 改用 deepseek），' +
           '请不要自己再次调用本工具，也不要编造报告；把失败情况简要告诉用户，让用户在界面上点按钮选择即可。'
-        : 'error: ⚠️ DeepSeek（付费）本次也失败，未生成报告，请勿编造。可建议用户稍后重试或检查 deepseek key。'
+        : provider === 'router'
+          ? 'error: PSE_RETRY_CHOICE\n⚠️ llm-router 免费模型池本次未能产出可用报告，未生成报告。\n' +
+            '本次为失败结果。UI 会为这次工具调用显示两个重试按钮（重试 router / 改用 deepseek），' +
+            '请不要自己再次调用本工具，也不要编造报告；把失败情况简要告诉用户，让用户在界面上点按钮选择即可。'
+          : 'error: ⚠️ DeepSeek（付费）本次也失败，未生成报告，请勿编造。可建议用户稍后重试或检查 deepseek key。'
     // 失败时只给简短原因。no-file 分支的 res.stdout 是 run.py 的 verbose 日志
     //（含「第 N 次循环 / [user] / 组合概览」等，看起来像有效产物），拼进去会让
     // agent 误以为报告可用、甚至据此编造。抽风失败一律只回原因，不附 stdout。
@@ -254,23 +272,25 @@ runServer({
       description:
         '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
         '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
-        '默认 provider="agnes"（免费）；若 agnes 抽风（产物经校验不可用），工具不会自动切付费，而是提示你「重试 agnes（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，将触发审批）」。' +
+        '默认 provider="router"：走 llm-router 网关的免费场景路由（fast：agnes-2.5→2.0→sensenova，' +
+        '429 限流自动 failover，统一 key，不直连厂商）。' +
+        '若 router 免费池失败，工具不会自动切付费，而是提示你「重试 router（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，将触发审批）」。' +
         '切到付费 deepseek 需经审批。',
       inputSchema: {
         type: 'object',
         properties: {
           provider: {
             type: 'string',
-            enum: ['agnes', 'deepseek'],
-            description: "模型来源：agnes（免费，默认；抽风时工具提示你可重试或显式选 deepseek，不自动切付费）或 deepseek（付费、稳定，约 ¥0.1–1/次，需审批）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'agnes'（免费）。",
+            enum: ['router', 'agnes', 'deepseek'],
+            description: "模型来源：router（默认，免费，走 llm-router 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费、直连 apihub，抽风率较高）；deepseek（付费、稳定，约 ¥0.1–1/次，需审批）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
           },
         },
         required: [],
         additionalProperties: false,
       },
       async run(args, report) {
-        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'agnes'
-        return pseReview(raw === 'deepseek' ? 'deepseek' : 'agnes', report)
+        const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'router'
+        return pseReview(raw === 'deepseek' ? 'deepseek' : raw === 'agnes' ? 'agnes' : 'router', report)
       },
     },
   ],
