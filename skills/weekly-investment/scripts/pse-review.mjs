@@ -62,7 +62,9 @@ function validateReview(text) {
 }
 
 const PREPARE_TIMEOUT_MS = 180_000
-const RUN_TIMEOUT_MS = 480_000
+// 免费池（sensenova）实测跑完 9 轮 PSE 团队约 7-9 分钟、16 万 token；
+// 480s 会把刚跑完的 run.py 掐死在临界点（"run 阶段失败"），留足余量。
+const RUN_TIMEOUT_MS = 900_000
 const MAX_OUTPUT = 48 * 1024
 // run.py 结束时打印的产物路径标记。
 const REVIEW_SAVED_RE = /Review 已保存 →\s*(\S+)/
@@ -122,7 +124,12 @@ function streamPython(script, workspaceEnv, report, timeoutMs) {
     let stderr = ''
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      reject(Object.assign(new Error(`${script} 超时（${timeoutMs / 1000}s）`), { stdout }))
+      reject(
+        Object.assign(new Error(`${script} 超时（${timeoutMs / 1000}s）`), {
+          stdout,
+          timedOut: true,
+        }),
+      )
     }, timeoutMs)
     child.stdout.setEncoding('utf8')
     const rl = createInterface({ input: child.stdout })
@@ -165,8 +172,8 @@ async function runPipeline(provider, report = () => {}) {
     const out = await streamPython('run.py', runEnv, (line) => report(`[pse] ${line}`), RUN_TIMEOUT_MS)
     stdout = out.stdout
   } catch (e) {
-    const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
-    return { ok: false, phase: 'run', detail: truncate(tail, 800), stdout }
+    const tail = ((e.stderr?.slice(-800)) || (e.stdout?.slice(-800)) || e.message || String(e)) || ''
+    return { ok: false, phase: 'run', timedOut: !!e.timedOut, detail: truncate(tail, 800), stdout }
   }
   report('团队分析完成，校验并保存报告…')
   // 3) 解析产物路径 → 校验可用性。
@@ -253,12 +260,18 @@ async function pseReview(requestedProvider, report) {
           ? res.reason ?? '(provider 与产物模型不一致)'
           : res.phase === 'no-file'
             ? 'PSE 团队运行完成但未产出有效周报（trace 无「最终结论」），可能中途卡死或超时。'
-            : `在 ${res.phase} 阶段失败。`
+            : res.phase === 'run' && res.timedOut
+              ? 'PSE 团队超过超时上限仍未完成（免费池模型较慢或卡住），已被终止，可重试或改用付费模型。'
+              : res.phase === 'run'
+                ? `run.py 异常退出：${res.detail || '无 stderr 输出'}`
+                : `在 ${res.phase} 阶段失败。`
     return truncate(`${hint}\n${paidNotice}\n${detail}`, MAX_OUTPUT)
   }
   const rel = await copyReviewToSandbox(res.path, res.review)
   return truncate(
-    `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
+    `⏹ 周报已完整交付（原始路径与预览副本见下方）。本轮流程到此结束：直接向用户输出最终结论，` +
+      `不要在未获用户新指令前再次调用任何工具（含 pse-review / portfolio-check）。\n\n` +
+      `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
     MAX_OUTPUT,
   )
 }
@@ -271,18 +284,19 @@ runServer({
       name: 'pse-review',
       description:
         '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
-        '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
+        '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 3-10 分钟（免费池模型较慢，' +
+        'UI 会持续显示实时进度）且会调用模型。' +
         '默认 provider="router"：走 llm-router 网关的免费场景路由（fast：agnes-2.5→2.0→sensenova，' +
         '429 限流自动 failover，统一 key，不直连厂商）。' +
-        '若 router 免费池失败，工具不会自动切付费，而是提示你「重试 router（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，将触发审批）」。' +
-        '切到付费 deepseek 需经审批。',
+        '若 router 免费池失败，工具不会自动切付费，而是提示你「重试 router（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，需先启用 PSE_ALLOW_PAID 开关）」。' +
+        '切到付费 deepseek 前，须先在 frameworks/autogen-pse/.env 设置 PSE_ALLOW_PAID=1（一次性审批）。',
       inputSchema: {
         type: 'object',
         properties: {
           provider: {
             type: 'string',
             enum: ['router', 'agnes', 'deepseek'],
-            description: "模型来源：router（默认，免费，走 llm-router 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费、直连 apihub，抽风率较高）；deepseek（付费、稳定，约 ¥0.1–1/次，需审批）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
+            description: "模型来源：router（默认，免费，走 llm-router 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费、直连 apihub，抽风率较高）；deepseek（付费、稳定，约 ¥0.1–1/次，需先在 autogen-pse/.env 启用 PSE_ALLOW_PAID=1（一次性审批））。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
           },
         },
         required: [],
@@ -290,6 +304,15 @@ runServer({
       },
       async run(args, report) {
         const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'router'
+        if (raw === 'deepseek' && !dotenvValue('PSE_ALLOW_PAID')) {
+          return (
+            'error: DEEPSEEK_GATED\n' +
+            '⚠️ DeepSeek（付费）未启用：这是操作员级安全开关，等价于一次性审批。\n' +
+            '请先在本机 frameworks/autogen-pse/.env 设置 PSE_ALLOW_PAID=1，再让用户重试。\n' +
+            '本次未调用模型、未产生任何费用。请勿编造报告，把以上提示原样转述给用户；' +
+            '默认免费路径（provider=router / agnes）不受此开关影响。'
+          )
+        }
         return pseReview(raw === 'deepseek' ? 'deepseek' : raw === 'agnes' ? 'agnes' : 'router', report)
       },
     },

@@ -14,7 +14,7 @@ Codex）都能拿到这组工具，这里用**零依赖 Node MCP stdio server** 
 |---|---|
 | `lib-mcp.mjs` | 零依赖 MCP stdio 协议骨架（JSON-RPC 2.0，支持 progress 通知） |
 | `portfolio-check.mjs` | 工具 `portfolio-check`：在 asset-lens 跑 `make calculate / analyze / compare` 刷新快照并扫描异常（只读，耗时 1-3 分钟） |
-| `pse-review.mjs` | 工具 `pse-review`：`prepare.py` + `run.py` 出完整 PSE 周报（2-6 分钟，会调模型；免费默认模型偶发抽风时返回 `error: PSE_RETRY_CHOICE` 供 UI 渲染重试选项） |
+| `pse-review.mjs` | 工具 `pse-review`：`prepare.py` + `run.py` 出完整 PSE 周报（2-6 分钟，会调模型；免费默认模型偶发抽风时返回 `error: PSE_RETRY_CHOICE` 供 UI 渲染重试选项；付费 `deepseek` 受 `PSE_ALLOW_PAID=1` 操作员开关保护，未启用则返回 `error: DEEPSEEK_GATED`） |
 
 依赖：`node >= 18`、`uv`、autogen-pse 项目（含 `tasks/portfolio-review/`）。
 
@@ -68,7 +68,9 @@ env = { PSE_REVIEW_PROVIDER = "default" }   # 可选：省略或填 "default" �
 
 `portfolio-check` / `pse-review` 的输出含**真实持仓、金额、收益率**。仅供本地私有
 使用：不要把摘要/周报原样外发、写入公开仓库。周报生成过程对 `deepseek` 提供商会产生
-模型费用（读取 autogen-pse/.env 的 key）；默认由免费默认 OpenAI 兼容网关提供，无费用。
+模型费用（读取 autogen-pse/.env 的 key）；`deepseek` 提供商是操作员级收费开关——须先在
+`autogen-pse/.env` 设置 `PSE_ALLOW_PAID=1` 才会放行（等价一次性审批），否则直接返回
+`error: DEEPSEEK_GATED`。默认由免费默认 OpenAI 兼容网关提供，无费用。
 
 ## 直接调试
 
