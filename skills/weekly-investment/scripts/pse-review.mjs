@@ -7,9 +7,9 @@
 
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import fs from 'node:fs'
 
 import { runServer, truncate } from './lib-mcp.mjs'
@@ -43,7 +43,9 @@ async function copyReviewToSandbox(srcPath, content) {
   const modelDir = basename(dirname(srcPath))
   const destName = `${modelDir}__${basename(srcPath)}`
   await writeFile(join(destDir, destName), content, 'utf8')
-  return `sandbox/weekly-investment/${destName}`
+  // 返回绝对路径：web-server 的 /api/file 用 resolve(filePath) 按自身 cwd 解析，
+  // 相对路径会被解析到错误位置 → ENOENT。绝对路径直达、且落在 /workspace 读根内可预览。
+  return join(STUDIO_ROOT, 'sandbox', 'weekly-investment', destName)
 }
 
 // 校验产物是否可用：agnes 偶发卡死，可能写出空/残缺报告。
@@ -202,7 +204,8 @@ async function runPipeline(provider, report = () => {}) {
   }
   const v = validateReview(review)
   if (!v.ok) return { ok: false, phase: 'invalid', reason: v.reason, path: m[1], review, stdout }
-  return { ok: true, path: m[1], review }
+  const absOrig = isAbsolute(m[1]) ? m[1] : join(AUTOGEN_PSE, m[1])
+  return { ok: true, path: absOrig, review }
 }
 
 async function pseReview(requestedProvider, report) {
@@ -271,9 +274,52 @@ async function pseReview(requestedProvider, report) {
   return truncate(
     `⏹ 周报已完整交付（原始路径与预览副本见下方）。本轮流程到此结束：直接向用户输出最终结论，` +
       `不要在未获用户新指令前再次调用任何工具（含 pse-review / portfolio-check）。\n\n` +
-      `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
+      `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n` +
+      `> 后续追问：用户就本报告追问任何细节（数字/仓位/建议）时，若上下文中报告全文已不可见，` +
+      `先用 read-file 读取上面的预览副本路径（或调用 pse-review-latest）取回全文再回答；` +
+      `禁止凭记忆编造报告里的数字。\n\n${res.review}`,
     MAX_OUTPUT,
   )
+}
+
+// Scan output/<model>/weekly_review_*.md and return the newest artifact
+// (null when nothing has been generated yet).
+async function findLatestReview() {
+  const outRoot = join(AUTOGEN_PSE, 'tasks', 'portfolio-review', 'output')
+  let best = null
+  let models = []
+  try {
+    models = await readdir(outRoot)
+  } catch {
+    return null
+  }
+  for (const model of models) {
+    const dir = join(outRoot, model)
+    let dirStat = null
+    try {
+      dirStat = await stat(dir)
+    } catch {
+      continue
+    }
+    if (!dirStat.isDirectory()) continue
+    let files = []
+    try {
+      files = await readdir(dir)
+    } catch {
+      continue
+    }
+    for (const f of files) {
+      if (!/^weekly_review_.*\.md$/.test(f)) continue
+      const p = join(dir, f)
+      try {
+        const fst = await stat(p)
+        if (!best || fst.mtimeMs > best.mtimeMs) best = { path: p, mtimeMs: fst.mtimeMs }
+      } catch {
+        // unreadable entry — skip
+      }
+    }
+  }
+  return best
 }
 
 runServer({
@@ -314,6 +360,30 @@ runServer({
           )
         }
         return pseReview(raw === 'deepseek' ? 'deepseek' : raw === 'agnes' ? 'agnes' : 'router', report)
+      },
+    },
+    {
+      name: 'pse-review-latest',
+      description:
+        '读取最近一次 pse-review 生成并保存的投资周报全文（Markdown，含产物绝对路径）。' +
+        '当报告全文已被上下文截断/摘要化、或用户在后续轮次追问报告细节（数字、仓位、建议）时调用，' +
+        '基于取回的全文回答，不要凭记忆复述报告内容。',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      async run() {
+        const best = await findLatestReview()
+        if (!best) {
+          return (
+            'error: 尚无任何 pse-review 产物（tasks/portfolio-review/output/ 下没有 weekly_review_*.md）。' +
+            '请先运行 pse-review 生成周报。'
+          )
+        }
+        const content = await readFile(best.path, { encoding: 'utf8' })
+        return truncate(`> 最近周报：${best.path}\n\n${content}`, MAX_OUTPUT)
       },
     },
   ],
