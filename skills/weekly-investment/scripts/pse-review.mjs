@@ -66,7 +66,11 @@ function validateReview(text) {
 const PREPARE_TIMEOUT_MS = 180_000
 // 免费池（sensenova）实测跑完 9 轮 PSE 团队约 7-9 分钟、16 万 token；
 // 480s 会把刚跑完的 run.py 掐死在临界点（"run 阶段失败"），留足余量。
-const RUN_TIMEOUT_MS = 900_000
+// 2026-10-24：900s 连续两轮掐死 run.py——router 免费池 429 限流 failover 到
+// kimi-k2.6 后单轮显著变慢（agnes/sensenova 限流恢复前都会这样），15 分钟
+// 余量不再够用，提到 1800s（30 分钟）。慢只是多等，掐死则整轮作废、agent
+// 还会自动重试再烧 15 分钟。
+const RUN_TIMEOUT_MS = 1_800_000
 const MAX_OUTPUT = 48 * 1024
 // run.py 结束时打印的产物路径标记。
 const REVIEW_SAVED_RE = /Review 已保存 →\s*(\S+)/
@@ -82,31 +86,37 @@ function dotenvValue(key) {
   }
 }
 
-// 模型/凭据严格跟随 provider（对应 autogen-pse 的 make review-agnes / review-deepseek）：
-//  - router（默认、免费）：走 llm-router 网关（http://localhost:9070/v1）的场景路由
-//     模型（默认 "fast"，agnres-2.5→2.0→sensenova 自动 failover、429 限流自动降级），
-//     不直接打厂商 API，key 统一由网关管理。
-//  - agnes（免费、直连）：显式注入 AGNES_* 凭据。绝不能回退读 .env 的 OPENAI_MODEL，
-//    否则默认路径会悄悄变成 .env 里的付费模型（如 OPENAI_MODEL=deepseek-v4-flash）。
-//  - deepseek（付费）：显式注入 OPENAI_* 凭据。
-// 所有分支都写死 model/base_url/key，run.py 不依赖 .env 的默认 OPENAI_MODEL。
-// 产物模型目录统一 = 注入的 OPENAI_MODEL（run.py 按 settings.OPENAI_MODEL 分目录）。
+// 模型/凭据统一收编进 tsm-hub 网关（对应 autogen-pse 的 make review-agnes / review-deepseek）：
+//  所有分支都经网关（ROUTER_BASE_URL，默认 http://localhost:9070/v1）+ 网关 key（ROUTER_API_KEY），
+//  不再直连任何厂商 API。key 统一由网关管理，且能吃到网关的 failover 兜底：
+//  - router（默认、免费）：走网关场景路由（默认 "fast"，agnes→sensenova 自动 failover、429 限流降级）。
+//  - agnes（免费）：经网关 agnes-2.0-flash 精确路由（agnes 主路 + 完整兜底链），apihub 抽风时
+//      自动降级，不再像直连那样 500 直接失败。
+//  - deepseek（付费）：经网关 deepseek-v4-flash 精确路由（deepseek 主路 + sensenova 同模型兜底），
+//      故障即同模型接管，避免付费主路单点。PSE_ALLOW_PAID 开关仍控制是否允许付费。
+//  所有分支都写死 model/base_url/key，run.py 不依赖 .env 的默认 OPENAI_MODEL。
+//  产物模型目录统一 = 注入的 OPENAI_MODEL（网关路由名，run.py 按 settings.OPENAI_MODEL 分目录）。
 function buildRunEnv(provider) {
   const env = { ...process.env }
+  // 网关地址与 key 统一取 autogen-pse/.env 的 ROUTER_*（与 router 分支一致）。
+  const gwBase = dotenvValue('ROUTER_BASE_URL') ?? 'http://localhost:9070/v1'
+  const gwKey = dotenvValue('ROUTER_API_KEY')
   if (provider === 'router') {
     env.OPENAI_MODEL = dotenvValue('ROUTER_MODEL') ?? 'fast'
-    env.OPENAI_BASE_URL = dotenvValue('ROUTER_BASE_URL') ?? 'http://localhost:9070/v1'
-    env.OPENAI_API_KEY = dotenvValue('ROUTER_API_KEY')
+    env.OPENAI_BASE_URL = gwBase
+    env.OPENAI_API_KEY = gwKey
     env.PSE_MODEL_STREAM = 'true'
   } else if (provider === 'deepseek') {
-    env.OPENAI_MODEL = dotenvValue('OPENAI_MODEL') ?? 'deepseek-v4-flash'
-    env.OPENAI_BASE_URL = dotenvValue('OPENAI_BASE_URL') ?? 'https://api.deepseek.com/v1'
-    env.OPENAI_API_KEY = dotenvValue('OPENAI_API_KEY')
+    // 收编进网关：deepseek-v4-flash 精确路由（deepseek 主路 + sensenova 同模型兜底）。
+    env.OPENAI_MODEL = 'deepseek-v4-flash'
+    env.OPENAI_BASE_URL = gwBase
+    env.OPENAI_API_KEY = gwKey
     env.PSE_MODEL_STREAM = 'true'
   } else {
-    env.OPENAI_MODEL = dotenvValue('AGNES_MODEL') ?? 'agnes-2.0-flash'
-    env.OPENAI_BASE_URL = dotenvValue('AGNES_BASE_URL') ?? 'https://apihub.agnes-ai.com/v1'
-    env.OPENAI_API_KEY = dotenvValue('AGNES_KEY')
+    // 收编进网关：agnes-2.0-flash 精确路由（agnes 主路 + 完整兜底链），不再直连 apihub。
+    env.OPENAI_MODEL = 'agnes-2.0-flash'
+    env.OPENAI_BASE_URL = gwBase
+    env.OPENAI_API_KEY = gwKey
     env.PSE_MODEL_STREAM = 'false'
   }
   return env
@@ -245,7 +255,7 @@ async function pseReview(requestedProvider, report) {
     // ToolCallCard 渲染两个重试按钮。
     const hint =
       provider === 'agnes'
-        ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 直连本次抽风（产物不可用），未生成报告。\n' +
+        ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 网关路由本次抽风（产物不可用），未生成报告。\n' +
           '本次为失败结果。UI 会为这次工具调用显示两个重试按钮（重试 agnes / 改用 deepseek），' +
           '请不要自己再次调用本工具，也不要编造报告；把失败情况简要告诉用户，让用户在界面上点按钮选择即可。'
         : provider === 'router'
@@ -342,7 +352,7 @@ runServer({
           provider: {
             type: 'string',
             enum: ['router', 'agnes', 'deepseek'],
-            description: "模型来源：router（默认，免费，走 llm-router 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费、直连 apihub，抽风率较高）；deepseek（付费、稳定，约 ¥0.1–1/次，需先在 autogen-pse/.env 启用 PSE_ALLOW_PAID=1（一次性审批））。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
+            description: "模型来源：router（默认，免费，走 tsm-hub 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费，经 tsm-hub 网关 agnes-2.0-flash 精确路由，含兜底，抽风率较直连更低）；deepseek（付费、稳定，约 ¥0.1–1/次，经 tsm-hub 网关 deepseek-v4-flash 路由含 sensenova 同模型兜底，需先在 autogen-pse/.env 启用 PSE_ALLOW_PAID=1（一次性审批））。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
           },
         },
         required: [],
