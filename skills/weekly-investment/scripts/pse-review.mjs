@@ -7,9 +7,9 @@
 
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import fs from 'node:fs'
 
 import { runServer, truncate } from './lib-mcp.mjs'
@@ -43,7 +43,9 @@ async function copyReviewToSandbox(srcPath, content) {
   const modelDir = basename(dirname(srcPath))
   const destName = `${modelDir}__${basename(srcPath)}`
   await writeFile(join(destDir, destName), content, 'utf8')
-  return `sandbox/weekly-investment/${destName}`
+  // 返回绝对路径：web-server 的 /api/file 用 resolve(filePath) 按自身 cwd 解析，
+  // 相对路径会被解析到错误位置 → ENOENT。绝对路径直达、且落在 /workspace 读根内可预览。
+  return join(STUDIO_ROOT, 'sandbox', 'weekly-investment', destName)
 }
 
 // 校验产物是否可用：agnes 偶发卡死，可能写出空/残缺报告。
@@ -62,7 +64,13 @@ function validateReview(text) {
 }
 
 const PREPARE_TIMEOUT_MS = 180_000
-const RUN_TIMEOUT_MS = 480_000
+// 免费池（sensenova）实测跑完 9 轮 PSE 团队约 7-9 分钟、16 万 token；
+// 480s 会把刚跑完的 run.py 掐死在临界点（"run 阶段失败"），留足余量。
+// 2026-10-24：900s 连续两轮掐死 run.py——router 免费池 429 限流 failover 到
+// kimi-k2.6 后单轮显著变慢（agnes/sensenova 限流恢复前都会这样），15 分钟
+// 余量不再够用，提到 1800s（30 分钟）。慢只是多等，掐死则整轮作废、agent
+// 还会自动重试再烧 15 分钟。
+const RUN_TIMEOUT_MS = 1_800_000
 const MAX_OUTPUT = 48 * 1024
 // run.py 结束时打印的产物路径标记。
 const REVIEW_SAVED_RE = /Review 已保存 →\s*(\S+)/
@@ -78,31 +86,37 @@ function dotenvValue(key) {
   }
 }
 
-// 模型/凭据严格跟随 provider（对应 autogen-pse 的 make review-agnes / review-deepseek）：
-//  - router（默认、免费）：走 llm-router 网关（http://localhost:9070/v1）的场景路由
-//     模型（默认 "fast"，agnres-2.5→2.0→sensenova 自动 failover、429 限流自动降级），
-//     不直接打厂商 API，key 统一由网关管理。
-//  - agnes（免费、直连）：显式注入 AGNES_* 凭据。绝不能回退读 .env 的 OPENAI_MODEL，
-//    否则默认路径会悄悄变成 .env 里的付费模型（如 OPENAI_MODEL=deepseek-v4-flash）。
-//  - deepseek（付费）：显式注入 OPENAI_* 凭据。
-// 所有分支都写死 model/base_url/key，run.py 不依赖 .env 的默认 OPENAI_MODEL。
-// 产物模型目录统一 = 注入的 OPENAI_MODEL（run.py 按 settings.OPENAI_MODEL 分目录）。
+// 模型/凭据统一收编进 tsm-hub 网关（对应 autogen-pse 的 make review-agnes / review-deepseek）：
+//  所有分支都经网关（ROUTER_BASE_URL，默认 http://localhost:9070/v1）+ 网关 key（ROUTER_API_KEY），
+//  不再直连任何厂商 API。key 统一由网关管理，且能吃到网关的 failover 兜底：
+//  - router（默认、免费）：走网关场景路由（默认 "fast"，agnes→sensenova 自动 failover、429 限流降级）。
+//  - agnes（免费）：经网关 agnes-2.0-flash 精确路由（agnes 主路 + 完整兜底链），apihub 抽风时
+//      自动降级，不再像直连那样 500 直接失败。
+//  - deepseek（付费）：经网关 deepseek-v4-flash 精确路由（deepseek 主路 + sensenova 同模型兜底），
+//      故障即同模型接管，避免付费主路单点。PSE_ALLOW_PAID 开关仍控制是否允许付费。
+//  所有分支都写死 model/base_url/key，run.py 不依赖 .env 的默认 OPENAI_MODEL。
+//  产物模型目录统一 = 注入的 OPENAI_MODEL（网关路由名，run.py 按 settings.OPENAI_MODEL 分目录）。
 function buildRunEnv(provider) {
   const env = { ...process.env }
+  // 网关地址与 key 统一取 autogen-pse/.env 的 ROUTER_*（与 router 分支一致）。
+  const gwBase = dotenvValue('ROUTER_BASE_URL') ?? 'http://localhost:9070/v1'
+  const gwKey = dotenvValue('ROUTER_API_KEY')
   if (provider === 'router') {
     env.OPENAI_MODEL = dotenvValue('ROUTER_MODEL') ?? 'fast'
-    env.OPENAI_BASE_URL = dotenvValue('ROUTER_BASE_URL') ?? 'http://localhost:9070/v1'
-    env.OPENAI_API_KEY = dotenvValue('ROUTER_API_KEY')
+    env.OPENAI_BASE_URL = gwBase
+    env.OPENAI_API_KEY = gwKey
     env.PSE_MODEL_STREAM = 'true'
   } else if (provider === 'deepseek') {
-    env.OPENAI_MODEL = dotenvValue('OPENAI_MODEL') ?? 'deepseek-v4-flash'
-    env.OPENAI_BASE_URL = dotenvValue('OPENAI_BASE_URL') ?? 'https://api.deepseek.com/v1'
-    env.OPENAI_API_KEY = dotenvValue('OPENAI_API_KEY')
+    // 收编进网关：deepseek-v4-flash 精确路由（deepseek 主路 + sensenova 同模型兜底）。
+    env.OPENAI_MODEL = 'deepseek-v4-flash'
+    env.OPENAI_BASE_URL = gwBase
+    env.OPENAI_API_KEY = gwKey
     env.PSE_MODEL_STREAM = 'true'
   } else {
-    env.OPENAI_MODEL = dotenvValue('AGNES_MODEL') ?? 'agnes-2.0-flash'
-    env.OPENAI_BASE_URL = dotenvValue('AGNES_BASE_URL') ?? 'https://apihub.agnes-ai.com/v1'
-    env.OPENAI_API_KEY = dotenvValue('AGNES_KEY')
+    // 收编进网关：agnes-2.0-flash 精确路由（agnes 主路 + 完整兜底链），不再直连 apihub。
+    env.OPENAI_MODEL = 'agnes-2.0-flash'
+    env.OPENAI_BASE_URL = gwBase
+    env.OPENAI_API_KEY = gwKey
     env.PSE_MODEL_STREAM = 'false'
   }
   return env
@@ -122,7 +136,12 @@ function streamPython(script, workspaceEnv, report, timeoutMs) {
     let stderr = ''
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      reject(Object.assign(new Error(`${script} 超时（${timeoutMs / 1000}s）`), { stdout }))
+      reject(
+        Object.assign(new Error(`${script} 超时（${timeoutMs / 1000}s）`), {
+          stdout,
+          timedOut: true,
+        }),
+      )
     }, timeoutMs)
     child.stdout.setEncoding('utf8')
     const rl = createInterface({ input: child.stdout })
@@ -165,8 +184,8 @@ async function runPipeline(provider, report = () => {}) {
     const out = await streamPython('run.py', runEnv, (line) => report(`[pse] ${line}`), RUN_TIMEOUT_MS)
     stdout = out.stdout
   } catch (e) {
-    const tail = ((e.stdout ?? e.stderr ?? e.message ?? String(e)) || '').slice(-800)
-    return { ok: false, phase: 'run', detail: truncate(tail, 800), stdout }
+    const tail = ((e.stderr?.slice(-800)) || (e.stdout?.slice(-800)) || e.message || String(e)) || ''
+    return { ok: false, phase: 'run', timedOut: !!e.timedOut, detail: truncate(tail, 800), stdout }
   }
   report('团队分析完成，校验并保存报告…')
   // 3) 解析产物路径 → 校验可用性。
@@ -195,7 +214,8 @@ async function runPipeline(provider, report = () => {}) {
   }
   const v = validateReview(review)
   if (!v.ok) return { ok: false, phase: 'invalid', reason: v.reason, path: m[1], review, stdout }
-  return { ok: true, path: m[1], review }
+  const absOrig = isAbsolute(m[1]) ? m[1] : join(AUTOGEN_PSE, m[1])
+  return { ok: true, path: absOrig, review }
 }
 
 async function pseReview(requestedProvider, report) {
@@ -235,7 +255,7 @@ async function pseReview(requestedProvider, report) {
     // ToolCallCard 渲染两个重试按钮。
     const hint =
       provider === 'agnes'
-        ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 直连本次抽风（产物不可用），未生成报告。\n' +
+        ? 'error: PSE_RETRY_CHOICE\n⚠️ agnes 网关路由本次抽风（产物不可用），未生成报告。\n' +
           '本次为失败结果。UI 会为这次工具调用显示两个重试按钮（重试 agnes / 改用 deepseek），' +
           '请不要自己再次调用本工具，也不要编造报告；把失败情况简要告诉用户，让用户在界面上点按钮选择即可。'
         : provider === 'router'
@@ -253,14 +273,63 @@ async function pseReview(requestedProvider, report) {
           ? res.reason ?? '(provider 与产物模型不一致)'
           : res.phase === 'no-file'
             ? 'PSE 团队运行完成但未产出有效周报（trace 无「最终结论」），可能中途卡死或超时。'
-            : `在 ${res.phase} 阶段失败。`
+            : res.phase === 'run' && res.timedOut
+              ? 'PSE 团队超过超时上限仍未完成（免费池模型较慢或卡住），已被终止，可重试或改用付费模型。'
+              : res.phase === 'run'
+                ? `run.py 异常退出：${res.detail || '无 stderr 输出'}`
+                : `在 ${res.phase} 阶段失败。`
     return truncate(`${hint}\n${paidNotice}\n${detail}`, MAX_OUTPUT)
   }
   const rel = await copyReviewToSandbox(res.path, res.review)
   return truncate(
-    `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n\n${res.review}`,
+    `⏹ 周报已完整交付（原始路径与预览副本见下方）。本轮流程到此结束：直接向用户输出最终结论，` +
+      `不要在未获用户新指令前再次调用任何工具（含 pse-review / portfolio-check）。\n\n` +
+      `${paidNotice}> PSE review 已保存（预览副本）：${rel}\n> 原始路径：${res.path}\n` +
+      `> 后续追问：用户就本报告追问任何细节（数字/仓位/建议）时，若上下文中报告全文已不可见，` +
+      `先用 read-file 读取上面的预览副本路径（或调用 pse-review-latest）取回全文再回答；` +
+      `禁止凭记忆编造报告里的数字。\n\n${res.review}`,
     MAX_OUTPUT,
   )
+}
+
+// Scan output/<model>/weekly_review_*.md and return the newest artifact
+// (null when nothing has been generated yet).
+async function findLatestReview() {
+  const outRoot = join(AUTOGEN_PSE, 'tasks', 'portfolio-review', 'output')
+  let best = null
+  let models = []
+  try {
+    models = await readdir(outRoot)
+  } catch {
+    return null
+  }
+  for (const model of models) {
+    const dir = join(outRoot, model)
+    let dirStat = null
+    try {
+      dirStat = await stat(dir)
+    } catch {
+      continue
+    }
+    if (!dirStat.isDirectory()) continue
+    let files = []
+    try {
+      files = await readdir(dir)
+    } catch {
+      continue
+    }
+    for (const f of files) {
+      if (!/^weekly_review_.*\.md$/.test(f)) continue
+      const p = join(dir, f)
+      try {
+        const fst = await stat(p)
+        if (!best || fst.mtimeMs > best.mtimeMs) best = { path: p, mtimeMs: fst.mtimeMs }
+      } catch {
+        // unreadable entry — skip
+      }
+    }
+  }
+  return best
 }
 
 runServer({
@@ -271,18 +340,19 @@ runServer({
       name: 'pse-review',
       description:
         '运行完整 PSE 投资回顾（autogen-pse 管线）：重算快照后，Planner/Specialist/Evaluator ' +
-        '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 2-6 分钟且会调用模型。' +
+        '团队 + 个人知识库检索，产出高质量周报全文（Markdown）。耗时 3-10 分钟（免费池模型较慢，' +
+        'UI 会持续显示实时进度）且会调用模型。' +
         '默认 provider="router"：走 llm-router 网关的免费场景路由（fast：agnes-2.5→2.0→sensenova，' +
         '429 限流自动 failover，统一 key，不直连厂商）。' +
-        '若 router 免费池失败，工具不会自动切付费，而是提示你「重试 router（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，将触发审批）」。' +
-        '切到付费 deepseek 需经审批。',
+        '若 router 免费池失败，工具不会自动切付费，而是提示你「重试 router（免费）」或「显式选 deepseek（付费、稳定，约 ¥0.1–1/次，需先启用 PSE_ALLOW_PAID 开关）」。' +
+        '切到付费 deepseek 前，须先在 frameworks/autogen-pse/.env 设置 PSE_ALLOW_PAID=1（一次性审批）。',
       inputSchema: {
         type: 'object',
         properties: {
           provider: {
             type: 'string',
             enum: ['router', 'agnes', 'deepseek'],
-            description: "模型来源：router（默认，免费，走 llm-router 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费、直连 apihub，抽风率较高）；deepseek（付费、稳定，约 ¥0.1–1/次，需审批）。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
+            description: "模型来源：router（默认，免费，走 tsm-hub 网关 fast 场景路由，agnres→sensenova 自动 failover）；agnes（免费，经 tsm-hub 网关 agnes-2.0-flash 精确路由，含兜底，抽风率较直连更低）；deepseek（付费、稳定，约 ¥0.1–1/次，经 tsm-hub 网关 deepseek-v4-flash 路由含 sensenova 同模型兜底，需先在 autogen-pse/.env 启用 PSE_ALLOW_PAID=1（一次性审批））。默认按 PSE_REVIEW_PROVIDER 环境变量，缺省 'router'（免费）。",
           },
         },
         required: [],
@@ -290,7 +360,40 @@ runServer({
       },
       async run(args, report) {
         const raw = args.provider || process.env.PSE_REVIEW_PROVIDER || 'router'
+        if (raw === 'deepseek' && !dotenvValue('PSE_ALLOW_PAID')) {
+          return (
+            'error: DEEPSEEK_GATED\n' +
+            '⚠️ DeepSeek（付费）未启用：这是操作员级安全开关，等价于一次性审批。\n' +
+            '请先在本机 frameworks/autogen-pse/.env 设置 PSE_ALLOW_PAID=1，再让用户重试。\n' +
+            '本次未调用模型、未产生任何费用。请勿编造报告，把以上提示原样转述给用户；' +
+            '默认免费路径（provider=router / agnes）不受此开关影响。'
+          )
+        }
         return pseReview(raw === 'deepseek' ? 'deepseek' : raw === 'agnes' ? 'agnes' : 'router', report)
+      },
+    },
+    {
+      name: 'pse-review-latest',
+      description:
+        '读取最近一次 pse-review 生成并保存的投资周报全文（Markdown，含产物绝对路径）。' +
+        '当报告全文已被上下文截断/摘要化、或用户在后续轮次追问报告细节（数字、仓位、建议）时调用，' +
+        '基于取回的全文回答，不要凭记忆复述报告内容。',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      async run() {
+        const best = await findLatestReview()
+        if (!best) {
+          return (
+            'error: 尚无任何 pse-review 产物（tasks/portfolio-review/output/ 下没有 weekly_review_*.md）。' +
+            '请先运行 pse-review 生成周报。'
+          )
+        }
+        const content = await readFile(best.path, { encoding: 'utf8' })
+        return truncate(`> 最近周报：${best.path}\n\n${content}`, MAX_OUTPUT)
       },
     },
   ],
