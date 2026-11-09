@@ -25,8 +25,12 @@ const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url))
 const SKILL_DIR = resolve(SCRIPTS_DIR, '..')
 const REPO_ROOT = resolve(SKILL_DIR, '../..')
 
-const BASE = process.env.ERISHEN_BASE ?? 'https://example.com'
-const WP = `${BASE}/wp-json/wp/v2`
+// ERISHEN_BASE may live in one of the .env files loaded below (~/.config/
+// resolve-skills/.env is the normal home), so resolve it AFTER that block —
+// reading process.env up here made the whole config silently fall back to
+// https://example.com (observed as a 404 from Example Domain on --pick).
+let BASE
+let WP
 const DEFAULT_NAME = '程序猿小林'
 const DEFAULT_EMAIL = 'noreply@example.com'
 
@@ -73,6 +77,9 @@ function loadEnvNoOverride(file) {
     if (f) loadEnvNoOverride(f)
   }
 }
+
+BASE = process.env.ERISHEN_BASE ?? 'https://example.com'
+WP = `${BASE}/wp-json/wp/v2`
 
 // Optional auth for sites that require login to comment (comment_registration).
 // Credentials come ONLY from the environment / .env — never hardcoded.
